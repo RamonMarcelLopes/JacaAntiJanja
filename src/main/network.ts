@@ -1,3 +1,4 @@
+import { execFile } from 'node:child_process';
 import dgram from 'node:dgram';
 import net from 'node:net';
 import os from 'node:os';
@@ -212,4 +213,52 @@ export async function mapPortUpnp(port: number): Promise<PortMapping | null> {
   } catch {
     return null;
   }
+}
+
+// ---------------------------------------------------------------- Windows Firewall
+
+const FIREWALL_RULE = 'Jaca anti Janja';
+
+function run(cmd: string, args: string[]): Promise<{ code: number; out: string }> {
+  return new Promise((resolve) => {
+    execFile(cmd, args, { windowsHide: true, timeout: 60_000 }, (err, stdout) => {
+      const code = err ? (typeof (err as any).code === 'number' ? (err as any).code : 1) : 0;
+      resolve({ code, out: String(stdout ?? '') });
+    });
+  });
+}
+
+/**
+ * Makes sure an inbound allow rule exists for this program. Without it Windows silently drops connections
+ * from other PCs, which friends see as "the host did not answer in time". Adding the rule needs admin, so it
+ * goes through one UAC prompt. Returns 'declined' when the user refuses it.
+ */
+export async function ensureFirewallRule(exePath: string): Promise<'exists' | 'added' | 'declined' | 'unsupported'> {
+  if (process.platform !== 'win32') return 'unsupported';
+  const show = await run('netsh', ['advfirewall', 'firewall', 'show', 'rule', `name=${FIREWALL_RULE}`, 'verbose']);
+  if (show.code === 0 && show.out.toLowerCase().includes(exePath.toLowerCase())) return 'exists';
+
+  const args = `advfirewall firewall add rule name="${FIREWALL_RULE}" dir=in action=allow program="${exePath}" enable=yes profile=any protocol=TCP`;
+  const ps = `Start-Process -FilePath netsh -ArgumentList '${args.replace(/'/g, "''")}' -Verb RunAs -Wait -WindowStyle Hidden`;
+  const elevated = await run('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps]);
+  if (elevated.code !== 0) return 'declined';
+  const check = await run('netsh', ['advfirewall', 'firewall', 'show', 'rule', `name=${FIREWALL_RULE}`, 'verbose']);
+  return check.code === 0 && check.out.toLowerCase().includes(exePath.toLowerCase()) ? 'added' : 'declined';
+}
+
+// ---------------------------------------------------------------- VPN detection
+
+export interface VpnAddress {
+  name: string;
+  ip: string;
+}
+
+/** Finds Radmin VPN / Tailscale / ZeroTier / Hamachi adapters: a way around CGNAT and closed routers. */
+export function detectVpnAddresses(): VpnAddress[] {
+  const found: VpnAddress[] = [];
+  for (const [name, list] of Object.entries(os.networkInterfaces())) {
+    if (!/radmin|tailscale|zerotier|hamachi/i.test(name)) continue;
+    for (const i of list ?? []) if (i.family === 'IPv4' && !i.internal) found.push({ name, ip: i.address });
+  }
+  return found;
 }

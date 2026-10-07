@@ -6,7 +6,7 @@ import { encodeInvite } from '../shared/invite';
 import { AppConfig, CaptureSource, ConnectivityResult, DEFAULT_PORT, RoomInfo } from '../shared/protocol';
 import { startAudio, stopAudio } from './audio';
 import { checkForUpdates, currentUpdateState, initUpdater, installUpdate } from './updater';
-import { discoverPublicIp, isPrivateIpv4, localIpv4Addresses, mapPortUpnp, PortMapping, tcpProbe } from './network';
+import { detectVpnAddresses, discoverPublicIp, ensureFirewallRule, isPrivateIpv4, localIpv4Addresses, mapPortUpnp, PortMapping, tcpProbe } from './network';
 import { SignalingServer } from './signaling';
 
 const DEFAULT_CONFIG: AppConfig = {
@@ -68,6 +68,13 @@ async function createRoom(): Promise<RoomInfo> {
   }
   server = srv;
 
+  if (app.isPackaged) {
+    const fw = await ensureFirewallRule(process.execPath);
+    if (fw === 'declined') {
+      warnings.push('Sem a permissão no firewall do Windows, os amigos não conseguem entrar. Crie a sala de novo e aceite o aviso de administrador.');
+    }
+  }
+
   mapping = await mapPortUpnp(cfg.port);
   if (!mapping) warnings.push('UPnP indisponível: libere a porta no roteador manualmente (port forwarding) ou use uma VPN mesh.');
 
@@ -85,6 +92,13 @@ async function createRoom(): Promise<RoomInfo> {
     }
   }
   if (isPrivateIpv4(ip)) warnings.push('O IP do convite é privado: só funciona na mesma rede ou numa VPN mesh.');
+  const vpn = detectVpnAddresses();
+  if (!cfg.hostAddressOverride.trim() && vpn.length) {
+    const v = vpn[0];
+    warnings.push(
+      `Detectei ${v.name} (${v.ip}). Se seus amigos estão na mesma rede dessa VPN, coloque ${v.ip} em Configurações > Endereço manual e crie a sala de novo. Isso funciona mesmo com CGNAT.`,
+    );
+  }
 
   return { code: encodeInvite({ ip, port: cfg.port, token: srv.token }), ip, port: cfg.port, token: srv.token, upnp: !!mapping, warnings };
 }

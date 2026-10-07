@@ -18,7 +18,8 @@ export const JOIN_ERROR_TEXT: Record<string, string> = {
   RATE_LIMITED: 'Muitas tentativas com código errado. Aguarde um minuto.',
   BAD_REQUEST: 'Pedido de entrada inválido.',
   UNREACHABLE: 'Host inacessível. Confira o código e se a porta do host está liberada (use "Testar conectividade" no host).',
-  TIMEOUT: 'O host não respondeu a tempo.',
+  TIMEOUT:
+    'O host não respondeu a tempo. Costuma ser firewall do Windows ou porta fechada no host, ou CGNAT do provedor. Peça para o host usar "Testar conectividade" nas Configurações ou uma VPN (Radmin, Tailscale) e mandar o novo código.',
 };
 
 export class SignalingClient {
