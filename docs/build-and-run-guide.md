@@ -96,3 +96,28 @@ belongs in the source code.
 - Installer splash: `scripts/make-installer-splash.cjs` renders `build/installer-splash.bmp` (wordmark + icon on the
   hex skin); `build/installer.nsh` shows it for 2.5 s and skips it on silent installs (auto-update).
 - Re-run the scripts only when the artwork or the splash design changes; the generated files are committed.
+
+## End-to-end tests (Playwright)
+
+`pnpm test:e2e` builds the app and runs `e2e/*.spec.ts` with Playwright's Electron support. Each test starts real
+app windows (a host and a guest) with separate user-data folders and talks to them through the UI, so do not touch
+the mouse during a run. Specs: `home.spec.ts` (first run, name check, text selection, avatar, settings),
+`room.spec.ts` (room name, join errors, three-dot menu, live profile changes, leave/close) and `share.spec.ts` (real
+screen capture, watching with audio, quality change). They use ports 47851-47853, so they do not clash with a room
+open on the default port. `pnpm test` still runs the fast unit tests (invite code, STUN, signaling server).
+
+## Live-reload development (`pnpm dev`)
+
+`pnpm dev` builds in watch mode and opens the app with live reload, so edits show up while the app is open:
+
+- CSS (`src/renderer/styles`): swapped in place, you keep your place (even inside a room).
+- Renderer code or `index.html`: the window reloads (back to the home screen).
+- Main process or preload: the app restarts.
+
+It uses its own profile in `%LOCALAPPDATA%\jaca-anti-janja-dev` and port 47803, separate from the installed app and from the e2e tests.
+F12 (or Ctrl+Shift+I) opens the DevTools. Stop it with Ctrl+C or by closing the app window. The hook that does the reloading
+(`setupDevReload` in `src/main/main.ts`) only runs when `JACA_DEV` is set and the app is not packaged.
+
+`pnpm dev:room` is the same with `--room`: after every reload or restart the window goes to the room screen by itself (it
+creates a room, typing the name "Jaca" first if the dev profile has none). The dev window also listens on the DevTools port 9333
+(localhost only), which is what the script uses to do that.

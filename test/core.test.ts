@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { WebSocket } from 'ws';
 import { decodeInvite, encodeInvite } from '../src/shared/invite';
+import { formatDuration } from '../src/shared/time';
 import { buildStunRequest, isCgnatRange, isPrivateIpv4, parseStunResponse } from '../src/main/network';
 import { SignalingServer } from '../src/main/signaling';
 
@@ -67,7 +68,7 @@ const join = (ws: WebSocket, token: number, name: string) => ws.send(JSON.string
 
 test('signaling: join, relay, share state, leave, room limit and bad token', async () => {
   const port = 48123;
-  const srv = new SignalingServer(port);
+  const srv = new SignalingServer(port, 'Sala de teste');
   await srv.start();
   try {
     const a = await open(port);
@@ -136,7 +137,7 @@ test('signaling: join, relay, share state, leave, room limit and bad token', asy
 });
 
 test('signaling: rate limits repeated bad tokens', async () => {
-  const srv = new SignalingServer(48124);
+  const srv = new SignalingServer(48124, 'Sala de teste');
   await srv.start();
   try {
     let last = '';
@@ -153,7 +154,7 @@ test('signaling: rate limits repeated bad tokens', async () => {
 });
 
 test('signaling: closes connections that never join', async () => {
-  const srv = new SignalingServer(48125);
+  const srv = new SignalingServer(48125, 'Sala de teste');
   await srv.start();
   try {
     const c = await open(48125);
@@ -165,7 +166,7 @@ test('signaling: closes connections that never join', async () => {
 });
 
 test('signaling: profile updates are sanitized and broadcast to the others', async () => {
-  const srv = new SignalingServer(48126);
+  const srv = new SignalingServer(48126, 'Sala de teste');
   await srv.start();
   try {
     const a = await open(48126);
@@ -197,6 +198,68 @@ test('signaling: profile updates are sanitized and broadcast to the others', asy
     await wait();
     const peer = c.msgs[0].payload.peers.find((p: any) => p.peerId === bId);
     assert.equal(peer.name.length, 24);
+  } finally {
+    srv.stop();
+  }
+});
+
+test('signaling: the invite code reaches everyone who joins in the welcome message', async () => {
+  const srv = new SignalingServer(48129, 'Sala de teste');
+  srv.inviteCode = 'K7QM-2XRA-9TPD-H4WB';
+  await srv.start();
+  try {
+    const a = await open(48129);
+    join(a.ws, srv.token, 'Ana');
+    const b = await open(48129);
+    join(b.ws, srv.token, 'Bia');
+    await wait();
+    assert.equal(a.msgs[0].payload.inviteCode, 'K7QM-2XRA-9TPD-H4WB');
+    assert.equal(b.msgs[0].payload.inviteCode, 'K7QM-2XRA-9TPD-H4WB');
+  } finally {
+    srv.stop();
+  }
+});
+
+test('signaling: the room name reaches everyone who joins in the welcome message', async () => {
+  const srv = new SignalingServer(48127, 'Noite de filmes');
+  await srv.start();
+  try {
+    const a = await open(48127);
+    join(a.ws, srv.token, 'Ana');
+    await wait();
+    assert.equal(a.msgs[0].payload.roomName, 'Noite de filmes');
+    const b = await open(48127);
+    join(b.ws, srv.token, 'Bia');
+    await wait();
+    assert.equal(b.msgs[0].payload.roomName, 'Noite de filmes');
+  } finally {
+    srv.stop();
+  }
+});
+
+test('formatDuration shows mm:ss under an hour and h:mm:ss after', () => {
+  assert.equal(formatDuration(0), '00:00');
+  assert.equal(formatDuration(999), '00:00');
+  assert.equal(formatDuration(65_000), '01:05');
+  assert.equal(formatDuration(59 * 60_000 + 59_000), '59:59');
+  assert.equal(formatDuration(3_600_000), '1:00:00');
+  assert.equal(formatDuration(3 * 3_600_000 + 7 * 60_000 + 9_000), '3:07:09');
+  assert.equal(formatDuration(-5), '00:00');
+  assert.equal(formatDuration(NaN), '00:00');
+});
+
+test('signaling: welcome reports how long the room has been open', async () => {
+  const srv = new SignalingServer(48128, 'Sala de teste');
+  await srv.start();
+  try {
+    const a = await open(48128);
+    join(a.ws, srv.token, 'Ana');
+    await wait(300);
+    const b = await open(48128);
+    join(b.ws, srv.token, 'Bia');
+    await wait();
+    assert.ok(a.msgs[0].payload.roomAgeMs >= 0 && a.msgs[0].payload.roomAgeMs < 250);
+    assert.ok(b.msgs[0].payload.roomAgeMs >= 290, 'a later joiner sees the real age of the room');
   } finally {
     srv.stop();
   }

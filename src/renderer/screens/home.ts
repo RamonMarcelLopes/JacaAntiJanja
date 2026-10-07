@@ -1,4 +1,4 @@
-import { decodeInvite } from '../../shared/invite';
+import { decodeInvite, encodeInvite } from '../../shared/invite';
 import { AppConfig, RoomInfo } from '../../shared/protocol';
 import { avatarEl, h, resizeAvatar, toast } from '../dom';
 import { JOIN_ERROR_TEXT, JoinError } from '../signaling-client';
@@ -45,6 +45,15 @@ export function renderHome(ctx: HomeContext): HTMLElement {
   drawAvatar();
 
   const codeInput = h('input', { type: 'text', placeholder: 'XXXX-XXXX-XXXX-XXXX', maxLength: 24, class: 'code-input', spellcheck: false });
+  const roomInput = h('input', {
+    type: 'text',
+    maxLength: 32,
+    placeholder: 'Nome da sala (opcional)',
+    value: ctx.cfg.roomName,
+    onkeydown: (e: KeyboardEvent) => {
+      if (e.key === 'Enter') void create();
+    },
+  });
   const createBtn = h('button', { class: 'primary', onclick: () => void create() }, 'Criar sala');
   const joinBtn = h('button', { onclick: () => void join() }, 'Entrar');
 
@@ -65,7 +74,9 @@ export function renderHome(ctx: HomeContext): HTMLElement {
     createBtn.disabled = true;
     createBtn.textContent = 'Criando sala...';
     try {
-      const room = await window.jaca.createRoom();
+      const roomName = roomInput.value.trim();
+      await ctx.update({ roomName });
+      const room = await window.jaca.createRoom(roomName);
       const session = await Session.join(`ws://127.0.0.1:${room.port}`, room.token, cfg, true);
       room.warnings.forEach((w) => toast(w));
       ctx.openRoom(session, room);
@@ -88,7 +99,7 @@ export function renderHome(ctx: HomeContext): HTMLElement {
     joinBtn.disabled = true;
     joinBtn.textContent = 'Entrando...';
     try {
-      const session = await Session.join(`ws://${invite.ip}:${invite.port}`, invite.token, cfg, false);
+      const session = await Session.join(`ws://${invite.ip}:${invite.port}`, invite.token, cfg, false, encodeInvite(invite));
       ctx.openRoom(session, null);
     } catch (e: any) {
       toast(e instanceof JoinError ? (JOIN_ERROR_TEXT[e.code] ?? e.message) : 'Falha ao entrar na sala.', 'error');
@@ -151,6 +162,7 @@ export function renderHome(ctx: HomeContext): HTMLElement {
         { class: 'block' },
         h('h2', {}, 'Criar sala'),
         h('p', { class: 'muted' }, 'Você vira o host e recebe um código para mandar aos amigos.'),
+        roomInput,
         createBtn,
       ),
       h('section', { class: 'block' }, h('h2', {}, 'Entrar com código'), h('div', { class: 'row' }, codeInput, joinBtn)),

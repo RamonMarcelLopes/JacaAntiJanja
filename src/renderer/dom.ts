@@ -19,11 +19,49 @@ export function h<K extends keyof HTMLElementTagNameMap>(tag: K, props: Props = 
   return el;
 }
 
+/**
+ * Closes an element with its exit animation: adds the "closing" class (see app.css) and removes the element when the
+ * animation ends. Removes it at once when the user prefers reduced motion. Safe to call twice.
+ */
+export function dismiss(el: HTMLElement): void {
+  if (!el.isConnected || el.classList.contains('closing')) return;
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    el.remove();
+    return;
+  }
+  el.classList.add('closing');
+  const remove = () => el.remove();
+  el.addEventListener('animationend', (e) => {
+    if (e.target === el) remove();
+  });
+  window.setTimeout(remove, 400); // safety net if the animation never fires
+}
+
+/**
+ * Lets a modal close by clicking the dark backdrop (the click must start AND end on the backdrop, so dragging a text selection out
+ * of the dialog does not close it) or by pressing Esc. `canClose` can veto it, e.g. while something is in progress.
+ */
+export function dismissOnBackdrop(overlay: HTMLElement, canClose: () => boolean = () => true): void {
+  let downOnBackdrop = false;
+  overlay.addEventListener('mousedown', (e) => {
+    downOnBackdrop = e.target === overlay;
+  });
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay && downOnBackdrop && canClose()) dismiss(overlay);
+    downOnBackdrop = false;
+  });
+  const onKey = (e: KeyboardEvent) => {
+    if (!overlay.isConnected) return document.removeEventListener('keydown', onKey);
+    if (e.key === 'Escape' && canClose()) dismiss(overlay); // an open dropdown list handles (and swallows) its own Esc first
+  };
+  document.addEventListener('keydown', onKey);
+}
+
 export function toast(message: string, kind: 'info' | 'error' = 'info'): void {
   const host = document.getElementById('toasts')!;
   const el = h('div', { class: `toast ${kind}` }, message);
   host.append(el);
-  setTimeout(() => el.remove(), kind === 'error' ? 7000 : 3500);
+  setTimeout(() => dismiss(el), kind === 'error' ? 7000 : 3500);
 }
 
 // Avatar backgrounds: fruit-derived tones that stay readable with white initials.

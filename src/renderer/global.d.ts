@@ -5,13 +5,19 @@ declare global {
     jaca: {
       getConfig(): Promise<AppConfig>;
       setConfig(patch: Partial<AppConfig>): Promise<AppConfig>;
-      createRoom(): Promise<RoomInfo>;
+      createRoom(roomName: string): Promise<RoomInfo>;
       closeRoom(): Promise<void>;
       testConnectivity(): Promise<ConnectivityResult>;
-      listSources(): Promise<CaptureSource[]>;
+      listSources(kind?: 'screens' | 'windows'): Promise<CaptureSource[]>;
       startAudio(sourceId: string | null): Promise<AudioStartResult>;
       stopAudio(): Promise<void>;
       onAudioData(cb: (chunk: Uint8Array) => void): void;
+      copyText(text: string): Promise<void>;
+      minimizeWindow(): Promise<void>;
+      toggleMaximizeWindow(): Promise<void>;
+      closeWindow(): Promise<void>;
+      isWindowMaximized(): Promise<boolean>;
+      onWindowMaximized(cb: (maximized: boolean) => void): void;
       getVersion(): Promise<string>;
       getUpdateState(): Promise<UpdateState>;
       checkForUpdates(): Promise<UpdateState>;

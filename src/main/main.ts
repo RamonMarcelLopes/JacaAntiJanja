@@ -1,9 +1,9 @@
-import { app, BrowserWindow, desktopCapturer, ipcMain, session, shell } from 'electron';
+import { app, BrowserWindow, clipboard, desktopCapturer, ipcMain, session, shell } from 'electron';
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { encodeInvite } from '../shared/invite';
-import { AppConfig, CaptureSource, ConnectivityResult, DEFAULT_PORT, RoomInfo } from '../shared/protocol';
+import { AppConfig, CaptureSource, ConnectivityResult, DEFAULT_PORT, MAX_ROOM_NAME, RoomInfo } from '../shared/protocol';
 import { startAudio, stopAudio } from './audio';
 import { checkForUpdates, currentUpdateState, initUpdater, installUpdate } from './updater';
 import { detectVpnAddresses, discoverPublicIp, ensureFirewallRule, isPrivateIpv4, localIpv4Addresses, mapPortUpnp, PortMapping, tcpProbe } from './network';
@@ -15,6 +15,7 @@ const DEFAULT_CONFIG: AppConfig = {
   port: DEFAULT_PORT,
   hostAddressOverride: '',
   excludeAudioProcess: 'Discord',
+  roomName: '',
   codec: 'auto',
   resolution: '1080p',
   fps: 30,
@@ -41,6 +42,7 @@ function loadConfig(): AppConfig {
 function saveConfig(patch: Partial<AppConfig>): AppConfig {
   const next = { ...loadConfig(), ...patch };
   next.name = String(next.name ?? '').slice(0, 24);
+  next.roomName = String(next.roomName ?? '').slice(0, MAX_ROOM_NAME);
   const port = Number(next.port);
   next.port = Number.isInteger(port) && port >= 1024 && port <= 65535 ? port : DEFAULT_PORT;
   fs.mkdirSync(path.dirname(configPath()), { recursive: true });
@@ -56,11 +58,17 @@ async function closeRoom(): Promise<void> {
   mapping = null;
 }
 
-async function createRoom(): Promise<RoomInfo> {
+/** Collapses whitespace and limits the length; empty names fall back to "Sala de <host>". */
+function cleanRoomName(raw: unknown, hostName: string): string {
+  const name = String(raw ?? '').replace(/\s+/g, ' ').trim().slice(0, MAX_ROOM_NAME);
+  return name || `Sala de ${hostName}`.slice(0, MAX_ROOM_NAME);
+}
+
+async function createRoom(requestedName: unknown): Promise<RoomInfo> {
   await closeRoom();
   const cfg = loadConfig();
   const warnings: string[] = [];
-  const srv = new SignalingServer(cfg.port);
+  const srv = new SignalingServer(cfg.port, cleanRoomName(requestedName, cfg.name));
   try {
     await srv.start();
   } catch (e: any) {
@@ -100,7 +108,9 @@ async function createRoom(): Promise<RoomInfo> {
     );
   }
 
-  return { code: encodeInvite({ ip, port: cfg.port, token: srv.token }), ip, port: cfg.port, token: srv.token, upnp: !!mapping, warnings };
+  const code = encodeInvite({ ip, port: cfg.port, token: srv.token });
+  srv.inviteCode = code; // everyone in the room gets it in the welcome message
+  return { code, ip, port: cfg.port, token: srv.token, upnp: !!mapping, warnings };
 }
 
 async function testConnectivity(): Promise<ConnectivityResult> {
@@ -131,9 +141,11 @@ async function testConnectivity(): Promise<ConnectivityResult> {
       };
 }
 
-async function listSources(): Promise<CaptureSource[]> {
+/** Screens come back fast; windows can take a while (one thumbnail each), so the renderer asks for them separately. */
+async function listSources(kind?: unknown): Promise<CaptureSource[]> {
+  const types: Array<'screen' | 'window'> = kind === 'screens' ? ['screen'] : kind === 'windows' ? ['window'] : ['screen', 'window'];
   const sources = await desktopCapturer.getSources({
-    types: ['screen', 'window'],
+    types,
     thumbnailSize: { width: 320, height: 180 },
     fetchWindowIcons: false,
   });
@@ -148,14 +160,26 @@ async function listSources(): Promise<CaptureSource[]> {
 function registerIpc(): void {
   ipcMain.handle('config:get', () => loadConfig());
   ipcMain.handle('config:set', (_e, patch: Partial<AppConfig>) => saveConfig(patch));
-  ipcMain.handle('room:create', () => createRoom());
+  ipcMain.handle('room:create', (_e, roomName: string) => createRoom(roomName));
   ipcMain.handle('room:close', () => closeRoom());
   ipcMain.handle('net:test', () => testConnectivity());
-  ipcMain.handle('capture:list', () => listSources());
+  ipcMain.handle('capture:list', (_e, kind?: string) => listSources(kind));
   ipcMain.handle('audio:start', (_e, sourceId: string | null) =>
     startAudio(loadConfig().excludeAudioProcess, typeof sourceId === 'string' ? sourceId : null, (chunk) => win?.webContents.send('audio:data', chunk)),
   );
   ipcMain.handle('audio:stop', () => stopAudio());
+  // Copying goes through the main process: the renderer has no browser clipboard permission on purpose.
+  ipcMain.handle('clipboard:write', (_e, text: unknown) => {
+    if (typeof text !== 'string' || text.length > 200) throw new Error('invalid text');
+    clipboard.writeText(text);
+  });
+  ipcMain.handle('window:minimize', (e) => BrowserWindow.fromWebContents(e.sender)?.minimize());
+  ipcMain.handle('window:toggle-maximize', (e) => {
+    const w = BrowserWindow.fromWebContents(e.sender);
+    if (w) (w.isMaximized() ? w.unmaximize() : w.maximize());
+  });
+  ipcMain.handle('window:close', (e) => BrowserWindow.fromWebContents(e.sender)?.close());
+  ipcMain.handle('window:is-maximized', (e) => BrowserWindow.fromWebContents(e.sender)?.isMaximized() ?? false);
   ipcMain.handle('app:version', () => app.getVersion());
   ipcMain.handle('update:state', () => currentUpdateState());
   ipcMain.handle('update:check', () => checkForUpdates());
@@ -197,7 +221,7 @@ function createWindow(): void {
     minHeight: 560,
     backgroundColor: '#14161a',
     title: 'Jaca anti Janja',
-    autoHideMenuBar: true,
+    frame: false, // the title bar is drawn by the renderer (see titlebar.ts)
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload', 'preload.js'),
       contextIsolation: true,
@@ -211,7 +235,45 @@ function createWindow(): void {
     return { action: 'deny' };
   });
   win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+  win.on('maximize', () => win?.webContents.send('window:maximized', true));
+  win.on('unmaximize', () => win?.webContents.send('window:maximized', false));
   win.on('closed', () => (win = null));
+}
+
+/** Re-reads every stylesheet with a new cache-busting query, so CSS edits show up without reloading the page. */
+const CSS_SWAP = `document.querySelectorAll('link[rel=stylesheet]').forEach((l) => { const u = new URL(l.href); u.searchParams.set('v', String(Date.now())); l.href = u.toString(); })`;
+
+/**
+ * Dev mode only (pnpm dev, see dev.mjs): reloads the window, or only swaps the CSS, when dev.mjs touches dist/.dev-reload.
+ * F12 / Ctrl+Shift+I toggle the DevTools. Never active in the installed app.
+ */
+function setupDevReload(): void {
+  if (!process.env.JACA_DEV || app.isPackaged) return;
+  const dir = path.join(__dirname, '..'); // dist/
+  const signalName = '.dev-reload';
+  let timer: NodeJS.Timeout | undefined;
+  let last = '';
+  fs.watch(dir, (_event, name) => {
+    if (name !== signalName) return;
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      let content = '';
+      try {
+        content = fs.readFileSync(path.join(dir, signalName), 'utf8');
+      } catch {
+        return;
+      }
+      if (content === last) return;
+      last = content;
+      if (content.startsWith('css')) void win?.webContents.executeJavaScript(CSS_SWAP);
+      else win?.webContents.reloadIgnoringCache();
+    }, 60);
+  });
+  win?.webContents.on('before-input-event', (_e, input) => {
+    if (input.type === 'keyDown' && (input.key === 'F12' || (input.control && input.shift && input.key.toLowerCase() === 'i'))) {
+      win?.webContents.toggleDevTools();
+    }
+  });
 }
 
 const gotLock = app.requestSingleInstanceLock();
@@ -228,6 +290,7 @@ if (!gotLock) {
     registerIpc();
     setupSession();
     createWindow();
+    setupDevReload();
     initUpdater(() => win);
   });
   app.on('window-all-closed', () => app.quit());

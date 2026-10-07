@@ -3,6 +3,11 @@ import { ErrorCode, Message, MessageType, PeerInfo } from '../shared/protocol';
 export interface WelcomePayload {
   peerId: string;
   peers: PeerInfo[];
+  roomName: string;
+  /** How long the room had been open when this client joined (absent on hosts older than this feature). */
+  roomAgeMs?: number;
+  /** The room's invite code, so every participant can copy it (absent on older hosts). */
+  inviteCode?: string;
 }
 
 export class JoinError extends Error {

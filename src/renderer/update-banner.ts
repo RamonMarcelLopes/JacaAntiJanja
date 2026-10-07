@@ -41,7 +41,8 @@ function render(): void {
 }
 
 export function initUpdateBanner(): void {
-  document.body.prepend(host);
+  // right under the custom title bar
+  document.getElementById('titlebar')?.after(host);
   window.jaca.onUpdateState((s) => {
     state = s;
     render();

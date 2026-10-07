@@ -45,9 +45,14 @@ body {
   color: var(--bone);
   font: 15px/1.5 var(--font-body);
   -webkit-font-smoothing: antialiased;
+  /* a desktop app, not a web page: only text fields are selectable */
+  user-select: none;
+  -webkit-user-select: none;
 }
+input, textarea { user-select: text; -webkit-user-select: text; }
+img, svg, video { -webkit-user-drag: none; }
 body { display: flex; flex-direction: column; }
-#app { flex: 1; min-height: 0; display: flex; }
+#app { position: relative; flex: 1; min-height: 0; display: flex; }
 .screen { display: flex; }
 .screen { flex: 1; min-width: 0; flex-direction: column; }
 h1, h2, h3 { font-family: var(--font-display); margin: 0; font-weight: 700; letter-spacing: -0.01em; }
@@ -77,7 +82,57 @@ button.danger { background: transparent; border-color: var(--ember); color: #ff9
 button.danger:hover:not(:disabled) { background: var(--ember); color: #fff; }
 button.ghost { background: transparent; border-color: transparent; color: var(--bone-dim); }
 button.ghost:hover:not(:disabled) { color: var(--bone); border-color: var(--line); }
-select { border-radius: 999px; padding-right: 10px; font-weight: 500; }
+/* Custom dropdown (select.ts). Split pill: the value centered on the left, a thin divider, and our own chevron in a segment
+   on the right. Base look = Settings (36px segment); the main screen uses the compact variant below. */
+.select-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 9px 50px 9px 14px;
+  font-weight: 500;
+  cursor: pointer;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5 6 8l3.5-3.5' fill='none' stroke='%23a2a88d' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"), linear-gradient(var(--line), var(--line));
+  background-repeat: no-repeat, no-repeat;
+  background-position: right 12px center, right 36px center;
+  background-size: 12px 12px, 1px 56%;
+}
+/* every label shares one grid cell and only the current one shows, so the width never changes with the value */
+.select-labels { display: grid; justify-items: center; }
+.select-labels .sl { grid-area: 1 / 1; visibility: hidden; white-space: nowrap; }
+.select-labels .sl.on { visibility: visible; }
+.select-btn:hover:not(:disabled), .select-btn:focus-visible, .select-btn.open {
+  border-color: var(--pod);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5 6 8l3.5-3.5' fill='none' stroke='%23e8ead9' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"), linear-gradient(rgba(242, 184, 60, 0.55), rgba(242, 184, 60, 0.55));
+}
+.select-btn.open { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 7.5 6 4l3.5 3.5' fill='none' stroke='%23e8ead9' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"), linear-gradient(rgba(242, 184, 60, 0.55), rgba(242, 184, 60, 0.55)); }
+/* main screen (room controls and share dialog): compact arrow segment (24px, 10px chevron) */
+.controls .select-btn, .dialog .select-btn {
+  padding: 9px 36px 9px 12px;
+  background-position: right 7px center, right 24px center;
+  background-size: 10px 10px, 1px 56%;
+}
+/* Settings: the dropdown fills the field (the generic ".settings-content button" rule would shrink it) */
+.settings-content .select-btn { justify-self: stretch; }
+
+/* the list that opens under the button */
+.select-menu {
+  position: fixed;
+  z-index: 30;
+  max-height: 320px;
+  overflow: auto;
+  padding: 6px;
+  background: var(--husk-2);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.55);
+}
+.select-option { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-radius: 10px; cursor: pointer; color: var(--bone); font-weight: 500; white-space: nowrap; }
+.select-option-label { flex: 1; }
+.select-check { width: 16px; height: 16px; display: grid; place-items: center; color: var(--pod); opacity: 0; }
+.select-option.selected { font-weight: 700; }
+.select-option.selected .select-check { opacity: 1; }
+.select-option.active { background: var(--husk); }
 :focus-visible { outline: 2px solid var(--pod); outline-offset: 2px; }
 
 /* ---------- avatars: pod-shaped (a little taller than wide, like a jackfruit bulb) */
@@ -180,20 +235,67 @@ select { border-radius: 999px; padding-right: 10px; font-weight: 500; }
   background: var(--husk);
 }
 .topbar h1 { font-size: 20px; }
+.back-btn { flex: none; width: 38px; height: 38px; padding: 0; display: grid; place-items: center; border-radius: 50%; background: transparent; border: 1.5px solid var(--line); color: var(--bone-dim); }
+.back-btn:hover:not(:disabled) { border-color: var(--pod); color: var(--bone); }
+.room-timer { display: inline-flex; align-items: center; gap: 6px; color: var(--bone-dim); font-weight: 600; font-variant-numeric: tabular-nums; cursor: default; }
+.room-title { max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---------- settings */
-.settings-grid {
-  display: grid;
-  align-content: start;
-  gap: 32px;
-  /* the scroll container spans the window so the scrollbar sits at its edge; padding centers a 680px column */
-  padding: 32px max(24px, calc((100% - 680px) / 2)) 48px;
-  width: 100%;
+.settings-layout { flex: 1; display: flex; min-height: 0; }
+/* left sidebar: one entry per category, icon + name */
+.settings-nav {
+  width: 232px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 20px 14px;
+  background: var(--husk);
+  border-right: 1px solid var(--line);
   overflow: auto;
 }
-.settings-grid section { display: grid; gap: 4px; }
-.settings-grid section + section { padding-top: 28px; border-top: 1px solid var(--line); }
-.settings-grid h2 { margin-bottom: 8px; }
+.settings-tab {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 14px;
+  text-align: left;
+  border-radius: 12px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--bone-dim);
+  font-weight: 600;
+}
+.settings-tab svg { flex: none; }
+.settings-tab { transition: background-color 0.15s, color 0.15s, border-color 0.15s, box-shadow 0.15s; }
+.settings-tab:hover:not([aria-selected='true']) { background: var(--husk-2); color: var(--bone); border-color: transparent; }
+.settings-tab[aria-selected='true'], .settings-tab[aria-selected='true']:hover { background: var(--husk-2); color: var(--bone); border-color: var(--line); box-shadow: inset 3px 0 0 var(--pod); }
+/* the content area is the scroll container, so the scrollbar sits at the window edge */
+.settings-content { flex: 1; min-width: 0; overflow: auto; padding: 36px 56px 48px; }
+.settings-content section { display: grid; gap: 4px; align-content: start; max-width: 640px; }
+.settings-content section[hidden] { display: none; }
+.settings-content h2 { margin-bottom: 12px; }
+.settings-content button { justify-self: start; }
+
+/* ---------- custom title bar (the window is frameless) */
+#titlebar {
+  flex: none;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-left: 12px;
+  background: var(--seed);
+  border-bottom: 1px solid var(--line);
+  -webkit-app-region: drag;
+}
+.tb-brand { display: flex; align-items: center; gap: 8px; font-family: var(--font-display); font-weight: 700; font-size: 13px; color: var(--bone-dim); }
+.tb-brand img { width: 18px; height: 18px; }
+.tb-controls { display: flex; height: 100%; -webkit-app-region: no-drag; }
+.tb-btn { width: 46px; height: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--bone-dim); display: grid; place-items: center; }
+.tb-btn:hover:not(:disabled) { background: var(--husk-2); color: var(--bone); }
+.tb-btn.close:hover:not(:disabled) { background: var(--ember); color: #fff; }
 .field { display: grid; gap: 5px; margin-bottom: 14px; }
 .field > span { font-weight: 600; }
 .field small { max-width: 62ch; }
@@ -233,14 +335,99 @@ select { border-radius: 999px; padding-right: 10px; font-weight: 500; }
 .player-bar {
   position: absolute;
   left: 0; right: 0; bottom: 0;
-  display: none;
+  display: none; /* shown as "grid" while you are watching something */
+  grid-template-columns: 1fr auto 1fr;
   align-items: center;
   gap: 8px;
-  padding: 28px 16px 12px;
+  padding: 36px 16px 14px;
   background: linear-gradient(transparent, rgba(12, 10, 7, 0.88));
 }
+.pb-left { display: flex; align-items: center; min-width: 0; }
+.pb-right { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+/* volume, fullscreen and the stop button only appear while the pointer is over the picture (or a control has keyboard focus) */
+.pb-hover { opacity: 0; pointer-events: none; transition: opacity 0.18s; }
+.player:hover .pb-hover, .pb-hover:focus-within { opacity: 1; pointer-events: auto; }
+.player-bar .icon-btn.stop-btn {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: rgba(23, 19, 14, 0.62);
+  color: var(--ember);
+  border: 1px solid rgba(255, 90, 54, 0.45);
+}
+.player-bar .icon-btn.stop-btn:hover:not(:disabled) { background: var(--ember); color: #fff; border-color: var(--ember); }
+.player:fullscreen .stop-btn { width: 52px; height: 52px; }
+.netinfo { position: relative; display: none; align-items: center; margin-right: 10px; padding: 2px; border-radius: 6px; color: rgba(255, 255, 255, 0.7); cursor: default; }
+.netinfo:hover, .netinfo:focus-visible { color: #fff; }
+.netinfo-tip {
+  display: none;
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 10px);
+  white-space: nowrap;
+  padding: 8px 12px;
+  background: var(--husk-2);
+  color: var(--bone);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.5);
+  font-size: 13px;
+  font-weight: 500;
+}
+.netinfo:hover .netinfo-tip, .netinfo:focus-visible .netinfo-tip { display: block; }
+.netinfo-tip div + div { margin-top: 2px; color: var(--bone-dim); }
 .player-title { font-family: var(--font-display); font-weight: 600; font-size: 16px; }
-.volume { width: 110px; padding: 0; accent-color: var(--pod); background: transparent; border: 0; }
+.icon-btn { width: 36px; height: 36px; padding: 0; display: grid; place-items: center; border-radius: 10px; }
+.player-bar .icon-btn { color: rgba(255, 255, 255, 0.85); }
+.player-bar .icon-btn:hover:not(:disabled) { color: #fff; }
+.player:fullscreen { border: 0; border-radius: 0; }
+.player:fullscreen .player-bar { padding: 56px 32px 24px; gap: 14px; }
+.player:fullscreen .player-title { font-size: 20px; }
+.player-bar { transition: opacity 0.25s; }
+.player.idle { cursor: none; }
+.player.idle .player-bar { opacity: 0; pointer-events: none; }
+/* our own controls only: never the browser's native video UI */
+video::-webkit-media-controls, video::-webkit-media-controls-enclosure, video::-webkit-media-controls-panel { display: none !important; }
+.volume-group { display: flex; align-items: center; gap: 4px; }
+.volume-pct { min-width: 40px; text-align: right; font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; color: rgba(255, 255, 255, 0.8); }
+.player:fullscreen .volume-pct { font-size: 15px; min-width: 46px; }
+/* The input is tall (easy to hit with the mouse) while the drawn track stays thin. */
+.volume {
+  --thumb: 9px; /* dot size at rest; see the hover rule below */
+  --thumb-offset: -2.5px;
+  -webkit-appearance: none;
+  appearance: none;
+  width: 110px;
+  height: 18px;
+  margin: 0 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.volume::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 4px;
+  background: linear-gradient(to right, var(--pod) var(--v, 100%), rgba(255, 255, 255, 0.28) var(--v, 100%));
+}
+/* small dot at rest, full size while the pointer is on the bar (or while it is focused / being dragged) */
+.volume::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: var(--thumb);
+  height: var(--thumb);
+  margin-top: var(--thumb-offset);
+  border: 0;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+  transition: width 0.12s, height 0.12s, margin-top 0.12s, background-color 0.12s;
+}
+.volume:hover, .volume:focus-visible, .volume:active { --thumb: 14px; --thumb-offset: -5px; }
+.volume:hover::-webkit-slider-thumb, .volume:focus-visible::-webkit-slider-thumb, .volume:active::-webkit-slider-thumb { background: var(--pod); }
+.player:fullscreen .volume { width: 140px; }
+.viewers { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; padding: 0 8px; color: var(--bone-dim); font-weight: 600; cursor: default; }
+.viewers.has { color: var(--bone); }
+.viewers svg { flex: none; }
 .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; min-height: 44px; }
 
 .sidebar { border-left: 1px solid var(--line); background: var(--husk); padding: 18px 14px; overflow: auto; }
@@ -258,6 +445,43 @@ select { border-radius: 999px; padding-right: 10px; font-weight: 500; }
   background: transparent;
   font-weight: 400;
 }
+/* own card: the three dots live inside the card's border, on the right, and only show on hover */
+.peer-row { position: relative; }
+.peer-row .peer { padding-right: 40px; }
+.peer-row:hover .peer { background: var(--husk-2); border-color: var(--line); }
+.peer-row:hover .peer.selected { border-color: var(--pod); }
+.kebab {
+  position: absolute;
+  top: 50%;
+  right: 7px;
+  transform: translateY(-50%);
+  width: 28px;
+  height: 36px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  opacity: 0;
+}
+.peer-row:hover .kebab, .kebab:focus-visible, .kebab[aria-expanded='true'] { opacity: 1; }
+.kebab:hover, .kebab[aria-expanded='true'] { background: var(--husk); border-color: var(--line); }
+/* three vertical dots drawn with one element and two shadows */
+.kebab-dots { width: 4px; height: 4px; border-radius: 50%; background: var(--bone-dim); box-shadow: 0 -7px 0 var(--bone-dim), 0 7px 0 var(--bone-dim); }
+.kebab:hover .kebab-dots { background: var(--bone); box-shadow: 0 -7px 0 var(--bone), 0 7px 0 var(--bone); }
+.menu {
+  position: fixed;
+  z-index: 15;
+  min-width: 170px;
+  padding: 6px;
+  background: var(--husk-2);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
+}
+.menu-item { display: block; width: 100%; text-align: left; background: transparent; border: 1px solid transparent; border-radius: 10px; padding: 9px 12px; font-weight: 500; }
+.menu-item:hover, .menu-item:focus-visible { background: var(--husk); border-color: var(--line); }
 .peer:disabled { opacity: 1; cursor: default; }
 .peer:hover:not(:disabled) { background: var(--husk-2); border-color: var(--line); }
 .peer.live .avatar { box-shadow: 0 0 0 2px var(--husk), 0 0 0 4px var(--ember); }
@@ -289,7 +513,7 @@ select { border-radius: 999px; padding-right: 10px; font-weight: 500; }
   border-radius: 999px;
   padding: 3px 4px 3px 16px;
 }
-.code-chip code { font-family: var(--font-display); font-size: 17px; font-weight: 600; letter-spacing: 0.06em; color: var(--pod); user-select: all; }
+.code-chip code { font-family: var(--font-display); font-size: 17px; font-weight: 600; letter-spacing: 0.06em; color: var(--pod); }
 
 /* ---------- share dialog */
 .overlay { position: fixed; inset: 0; background: rgba(12, 10, 7, 0.72); display: grid; place-items: center; z-index: 10; }
@@ -304,7 +528,43 @@ select { border-radius: 999px; padding-right: 10px; font-weight: 500; }
   display: grid;
   gap: 16px;
 }
-.source-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; max-height: 360px; overflow: auto; padding: 4px; }
+/* segmented control: Telas | Janelas. The highlight is a pseudo-element that slides under the buttons. */
+.seg { position: relative; display: inline-grid; grid-template-columns: 1fr 1fr; gap: 2px; padding: 4px; justify-self: start; align-self: flex-start; background: var(--husk); border: 1px solid var(--line); border-radius: 999px; }
+.seg::before {
+  content: '';
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 4px;
+  width: calc((100% - 10px) / 2);
+  background: var(--husk-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.seg[data-kind='windows']::before { transform: translateX(calc(100% + 2px)); }
+.seg-btn { position: relative; z-index: 1; padding: 7px 22px; border: 1px solid transparent; border-radius: 999px; background: transparent; color: var(--bone-dim); font-weight: 600; transition: color 0.2s; }
+.seg-btn:hover:not([aria-selected='true']) { color: var(--bone); border-color: transparent; }
+.seg-btn[aria-selected='true'], .seg-btn[aria-selected='true']:hover { color: var(--bone); border-color: transparent; }
+.source { animation: fade-in 0.22s ease-out; }
+.source.skeleton { pointer-events: none; cursor: default; }
+.sk-img, .sk-line {
+  background: linear-gradient(100deg, var(--husk) 30%, var(--line) 50%, var(--husk) 70%);
+  background-size: 200% 100%;
+  animation: shimmer 1.2s linear infinite;
+}
+.sk-img { width: 100%; aspect-ratio: 16 / 9; border-radius: 10px; }
+.sk-line { display: block; height: 12px; width: 55%; margin: 2px 4px; border-radius: 6px; }
+@keyframes shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+.source-empty { grid-column: 1 / -1; padding: 44px 12px; text-align: center; }
+/* The share dialog has one fixed size; the lists scroll inside it instead of growing it. Both lists sit side by side in a track
+   that swipes sideways when you change tab. */
+.share-dialog { display: flex; flex-direction: column; width: min(820px, 94vw); height: min(620px, 90vh); overflow: hidden; }
+.share-dialog > * { flex: none; }
+.share-dialog > .source-viewport { flex: 1 1 auto; min-height: 0; }
+.source-viewport { overflow: hidden; border-radius: 12px; }
+.source-track { display: flex; width: 200%; height: 100%; transition: transform 0.34s cubic-bezier(0.4, 0, 0.2, 1); }
+.source-panel { flex: 0 0 50%; min-width: 0; height: 100%; overflow-y: auto; padding: 4px; display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; align-content: start; }
 .source {
   display: grid;
   gap: 8px;
@@ -342,7 +602,6 @@ select { border-radius: 999px; padding-right: 10px; font-weight: 500; }
   * { transition: none !important; }
 }
 
-.settings-grid button { justify-self: start; }
 
 /* ---------- update banner */
 .update-slot:empty { display: none; }
@@ -377,3 +636,42 @@ select { border-radius: 999px; padding-right: 10px; font-weight: 500; }
 .sidebar::-webkit-scrollbar-thumb, .dialog::-webkit-scrollbar-thumb, .source-grid::-webkit-scrollbar-thumb { background-color: var(--line); }
 
 .profile-dialog { width: min(460px, 94vw); }
+
+/* ---------- entrance animations (popups) */
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes pop-in { from { opacity: 0; transform: translateY(8px) scale(0.97); } to { opacity: 1; transform: none; } }
+@keyframes fade-out { to { opacity: 0; } }
+@keyframes pop-out { to { opacity: 0; transform: translateY(8px) scale(0.97); } }
+@keyframes toast-out { to { opacity: 0; transform: translateX(16px); } }
+@keyframes toast-in { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: none; } }
+.overlay { animation: fade-in 0.18s ease-out; }
+.dialog { animation: pop-in 0.24s cubic-bezier(0.2, 0.8, 0.2, 1); }
+.select-menu, .menu { animation: pop-in 0.14s ease-out; transform-origin: top center; }
+.toast { animation: toast-in 0.26s cubic-bezier(0.2, 0.8, 0.2, 1); }
+/* exit animations: dismiss() in dom.ts adds .closing and removes the element when the animation ends */
+.overlay.closing { animation: fade-out 0.18s ease-in forwards; pointer-events: none; }
+.overlay.closing .dialog { animation: pop-out 0.18s ease-in forwards; }
+.select-menu.closing, .menu.closing { animation: pop-out 0.12s ease-in forwards; pointer-events: none; }
+.toast.closing { animation: toast-out 0.22s ease-in forwards; }
+@media (prefers-reduced-motion: reduce) {
+  .overlay, .dialog, .select-menu, .menu, .toast, .source, .sk-img, .sk-line { animation: none; }
+  .source-track, .seg::before { transition: none; }
+}
+
+/* ---------- screen transitions (see mount() in main.ts): the new screen slides in while the old one slides out */
+#app.transitioning { overflow: hidden; }
+#app.transitioning > .screen { position: absolute; inset: 0; }
+@keyframes screen-in-right { from { opacity: 0; transform: translateX(64px); } to { opacity: 1; transform: none; } }
+@keyframes screen-in-left { from { opacity: 0; transform: translateX(-64px); } to { opacity: 1; transform: none; } }
+@keyframes screen-out-left { to { opacity: 0; transform: translateX(-64px); } }
+@keyframes screen-out-right { to { opacity: 0; transform: translateX(64px); } }
+.enter-from-right { animation: screen-in-right 0.36s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+.enter-from-left { animation: screen-in-left 0.36s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+.leave-to-left { animation: screen-out-left 0.28s ease-in both; pointer-events: none; }
+.leave-to-right { animation: screen-out-right 0.28s ease-in both; pointer-events: none; }
+/* Settings: the panel of the chosen category fades up each time it is shown */
+@keyframes panel-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.settings-content section:not([hidden]) { animation: panel-in 0.26s cubic-bezier(0.2, 0.8, 0.2, 1); }
+@media (prefers-reduced-motion: reduce) {
+  .enter-from-right, .enter-from-left, .leave-to-left, .leave-to-right, .settings-content section { animation: none; }
+}

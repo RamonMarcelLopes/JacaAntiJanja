@@ -5,3 +5,5 @@ release
 resources/audio
 helper/**/bin
 helper/**/obj
+test-results
+playwright-report

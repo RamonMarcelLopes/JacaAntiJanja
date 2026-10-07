@@ -3,6 +3,7 @@ export const MAX_MESSAGE_BYTES = 256 * 1024;
 export const JOIN_TIMEOUT_MS = 5000;
 export const HEARTBEAT_MS = 15000;
 export const DEFAULT_PORT = 47800;
+export const MAX_ROOM_NAME = 32;
 
 export type ErrorCode = 'ROOM_FULL' | 'BAD_TOKEN' | 'ROOM_CLOSED' | 'RATE_LIMITED' | 'BAD_REQUEST';
 
@@ -82,6 +83,8 @@ export interface AppConfig {
   port: number;
   hostAddressOverride: string;
   excludeAudioProcess: string;
+  /** Last room name typed when creating a room. */
+  roomName: string;
   codec: 'auto' | 'vp9' | 'h264' | 'av1';
   resolution: Resolution;
   fps: Fps;

@@ -18,6 +18,10 @@ export class Session {
   stream: MediaStream | null = null;
   shareInfo: ShareInfo | null = null;
   audioNote = '';
+  roomName = '';
+  inviteCode = '';
+  private roomAgeMs: number | null = null;
+  private joinedAt = 0;
   /** True when the shared audio cannot contain this app's own playback (single-window capture). */
   audioIsolated = false;
   onChange: () => void = () => undefined;
@@ -34,10 +38,15 @@ export class Session {
     readonly isHost: boolean,
   ) {}
 
-  static async join(url: string, token: number, cfg: AppConfig, isHost: boolean): Promise<Session> {
+  static async join(url: string, token: number, cfg: AppConfig, isHost: boolean, joinCode = ''): Promise<Session> {
     const sig = new SignalingClient();
     const welcome = await sig.connect(url, token, cfg.name, cfg.avatar);
     const s = new Session(sig, welcome.peerId, isHost);
+    s.roomName = welcome.roomName ?? '';
+    // older hosts do not send the code: fall back to the one this person typed to get in
+    s.inviteCode = welcome.inviteCode || joinCode;
+    s.roomAgeMs = typeof welcome.roomAgeMs === 'number' ? welcome.roomAgeMs : null;
+    s.joinedAt = performance.now(); // monotonic: immune to clock changes and to clock differences between PCs
     s.peers.set(welcome.peerId, { peerId: welcome.peerId, name: cfg.name, avatar: cfg.avatar, share: null, quality: 'unknown', rtt: null });
     for (const p of welcome.peers) s.peers.set(p.peerId, { ...p, quality: 'unknown', rtt: null });
     s.pm = new PeerManager(sig, welcome.peerId, {
@@ -66,6 +75,11 @@ export class Session {
     sig.onMessage = (m) => void s.handle(m);
     sig.onClose = (reason) => s.finish(reason);
     return s;
+  }
+
+  /** Time the room has been open, or null when the host did not report it. */
+  roomElapsedMs(): number | null {
+    return this.roomAgeMs === null ? null : this.roomAgeMs + (performance.now() - this.joinedAt);
   }
 
   get watcherCount(): number {
@@ -178,7 +192,8 @@ export class Session {
       audio: true,
     });
     const audio = await window.jaca.startAudio(sourceId);
-    this.audioNote = audio.message;
+    // only problems are shown next to the controls; a working capture needs no announcement
+    this.audioNote = audio.ok ? '' : audio.message;
     this.audioIsolated = audio.ok && audio.isolated;
     if (audio.ok) {
       // Replace the loopback track (which includes Discord) with the one that excludes it.

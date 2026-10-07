@@ -27,8 +27,14 @@ export class SignalingServer {
   private badTokens = new Map<string, number[]>();
   private heartbeat: NodeJS.Timeout | null = null;
   readonly token: number;
+  private readonly startedAt = Date.now();
+  /** Invite code of the room, set by the main process once the public address is known; sent to everyone on join. */
+  inviteCode = '';
 
-  constructor(private port: number) {
+  constructor(
+    private port: number,
+    readonly roomName: string,
+  ) {
     this.token = randomBytes(4).readUInt32BE(0);
   }
 
@@ -162,7 +168,7 @@ export class SignalingServer {
     const peer: Peer = { peerId: randomBytes(6).toString('hex'), name, avatar, share: null, ws, alive: true };
     const others = [...this.peers.values()].map(toInfo);
     this.peers.set(peer.peerId, peer);
-    this.send(ws, { type: 'welcome', payload: { peerId: peer.peerId, peers: others } });
+    this.send(ws, { type: 'welcome', payload: { peerId: peer.peerId, peers: others, roomName: this.roomName, roomAgeMs: Date.now() - this.startedAt, inviteCode: this.inviteCode } });
     this.broadcast({ type: 'peer-joined', payload: toInfo(peer) }, peer.peerId);
     return peer;
   }
