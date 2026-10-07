@@ -1,0 +1,79 @@
+{
+  "name": "jaca-anti-janja",
+  "productName": "Jaca anti Janja",
+  "version": "0.1.0",
+  "description": "P2P screen sharing with system audio, no cloud backend",
+  "main": "dist/main/main.js",
+  "private": true,
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "esbuild test/core.test.ts --bundle --platform=node --outfile=dist-test/core.test.js --log-level=warning && node --test dist-test/core.test.js",
+    "start": "node build.mjs && electron .",
+    "dist": "node build.mjs && electron-builder --win nsis --publish never",
+    "build:audio": "dotnet publish helper/AudioCapture -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o resources/audio"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron",
+      "esbuild"
+    ]
+  },
+  "build": {
+    "appId": "com.jaca.antijanja",
+    "productName": "Jaca anti Janja",
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "deleteAppDataOnUninstall": true,
+      "runAfterFinish": true,
+      "include": "build/installer.nsh",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico"
+    },
+    "extraResources": [
+      {
+        "from": "resources/audio",
+        "to": "audio",
+        "filter": [
+          "jaca-audio.exe"
+        ]
+      }
+    ],
+    "artifactName": "JacaAntiJanja-Setup-${version}.${ext}",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "RamonMarcelLopes",
+        "repo": "JacaAntiJanja",
+        "releaseType": "release"
+      }
+    ]
+  },
+  "devDependencies": {
+    "@fontsource-variable/bricolage-grotesque": "^5.3.0",
+    "@fontsource-variable/hanken-grotesk": "^5.3.0",
+    "@types/node": "^26.6.4",
+    "@types/ws": "^8.18.2",
+    "electron": "^44.7.0",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2",
+    "ws": "^8.22.0"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  }
+}
