@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import dgram from 'node:dgram';
+import dns from 'node:dns/promises';
 import net from 'node:net';
 import os from 'node:os';
 import http from 'node:http';
@@ -21,7 +22,13 @@ export function buildStunRequest(txId: Buffer): Buffer {
   return buf;
 }
 
-export function parseStunResponse(msg: Buffer, txId: Buffer): string | null {
+export interface StunMapping {
+  ip: string;
+  port: number;
+}
+
+/** The public address a STUN server saw (XOR-MAPPED-ADDRESS, or the legacy MAPPED-ADDRESS). */
+export function parseStunMapped(msg: Buffer, txId: Buffer): StunMapping | null {
   if (msg.length < 20 || msg.readUInt16BE(0) !== 0x0101) return null;
   if (!msg.subarray(8, 20).equals(txId)) return null;
   const end = Math.min(msg.length, 20 + msg.readUInt16BE(2));
@@ -30,20 +37,21 @@ export function parseStunResponse(msg: Buffer, txId: Buffer): string | null {
     const type = msg.readUInt16BE(off);
     const len = msg.readUInt16BE(off + 2);
     const val = off + 4;
-    if (type === 0x0020 && len >= 8 && msg[val + 1] === 0x01) {
-      const ip = Buffer.alloc(4);
-      msg.copy(ip, 0, val + 4, val + 8);
+    if ((type === 0x0020 || type === 0x0001) && len >= 8 && msg[val + 1] === 0x01) {
+      const xor = type === 0x0020;
       const cookie = Buffer.alloc(4);
       cookie.writeUInt32BE(MAGIC_COOKIE, 0);
-      for (let i = 0; i < 4; i++) ip[i] ^= cookie[i];
-      return [...ip].join('.');
-    }
-    if (type === 0x0001 && len >= 8 && msg[val + 1] === 0x01) {
-      return [...msg.subarray(val + 4, val + 8)].join('.');
+      const port = msg.readUInt16BE(val + 2) ^ (xor ? MAGIC_COOKIE >>> 16 : 0);
+      const ip = [0, 1, 2, 3].map((i) => msg[val + 4 + i] ^ (xor ? cookie[i] : 0)).join('.');
+      return { ip, port };
     }
     off = val + len + ((4 - (len % 4)) % 4);
   }
   return null;
+}
+
+export function parseStunResponse(msg: Buffer, txId: Buffer): string | null {
+  return parseStunMapped(msg, txId)?.ip ?? null;
 }
 
 function stunQuery(host: string, port: number, timeoutMs: number): Promise<string | null> {
@@ -248,17 +256,114 @@ export async function ensureFirewallRule(exePath: string): Promise<'exists' | 'a
 
 // ---------------------------------------------------------------- VPN detection
 
-export interface VpnAddress {
+export interface VpnCandidate {
   name: string;
   ip: string;
+  kind: string;
 }
 
-/** Finds Radmin VPN / Tailscale / ZeroTier / Hamachi adapters: a way around CGNAT and closed routers. */
-export function detectVpnAddresses(): VpnAddress[] {
-  const found: VpnAddress[] = [];
-  for (const [name, list] of Object.entries(os.networkInterfaces())) {
-    if (!/radmin|tailscale|zerotier|hamachi/i.test(name)) continue;
-    for (const i of list ?? []) if (i.family === 'IPv4' && !i.internal) found.push({ name, ip: i.address });
+const VPN_ADAPTER = /radmin|tailscale|zerotier|hamachi|wireguard|netbird|nordlynx|openvpn|wintun|tap-windows|vpn/i;
+
+function vpnKind(name: string): string {
+  const known: Array<[RegExp, string]> = [
+    [/radmin/i, 'Radmin VPN'],
+    [/tailscale/i, 'Tailscale'],
+    [/zerotier/i, 'ZeroTier'],
+    [/hamachi/i, 'Hamachi'],
+    [/netbird/i, 'NetBird'],
+    [/wireguard|nordlynx|wintun/i, 'WireGuard'],
+    [/openvpn|tap-windows/i, 'OpenVPN'],
+  ];
+  return known.find(([re]) => re.test(name))?.[1] ?? 'VPN';
+}
+
+/** Picks the virtual-network adapters (Radmin VPN, Tailscale, ZeroTier, Hamachi, WireGuard...) out of the machine's interfaces. */
+export function classifyVpnInterfaces(ifaces: NodeJS.Dict<os.NetworkInterfaceInfo[]>): VpnCandidate[] {
+  const found: VpnCandidate[] = [];
+  for (const [name, list] of Object.entries(ifaces)) {
+    if (!VPN_ADAPTER.test(name)) continue;
+    for (const i of list ?? []) {
+      if (i.family === 'IPv4' && !i.internal && !found.some((f) => f.ip === i.address)) found.push({ name, ip: i.address, kind: vpnKind(name) });
+    }
   }
   return found;
+}
+
+/** The mesh/VPN adapters of this PC: a way around CGNAT and closed routers. */
+export function detectVpnAddresses(): VpnCandidate[] {
+  return classifyVpnInterfaces(os.networkInterfaces());
+}
+
+export interface NatTestResult {
+  kind: 'cone' | 'symmetric' | 'unknown';
+  message: string;
+  publicIp: string | null;
+  seen: string[];
+}
+
+/** Decides from the "ip:port" each STUN server reported for the SAME local socket. The same port everywhere = cone-type NAT. */
+export function natVerdict(seen: string[]): NatTestResult {
+  const cut = (v: string) => v.lastIndexOf(':');
+  const ports = seen.map((v) => v.slice(cut(v) + 1));
+  const publicIp = seen.length ? seen[0].slice(0, cut(seen[0])) : null;
+  if (seen.length < 2) {
+    return { kind: 'unknown', publicIp, seen, message: 'Não consegui concluir o teste: poucos servidores responderam. Verifique a internet e tente de novo.' };
+  }
+  if (new Set(ports).size === 1) {
+    return {
+      kind: 'cone',
+      publicIp,
+      seen,
+      message: 'Boa notícia: sua rede deve fechar conexão direta com seus amigos. O endereço público se manteve o mesmo em todos os testes.',
+    };
+  }
+  return {
+    kind: 'symmetric',
+    publicIp,
+    seen,
+    message: 'Atenção: sua rede muda o endereço público a cada destino (NAT simétrico). Conexões diretas costumam falhar; use o modo Direto com uma VPN.',
+  };
+}
+
+/** Asks several STUN servers, from one local UDP socket, which public address they see. */
+export async function natMappingTest(): Promise<NatTestResult> {
+  const sock = dgram.createSocket('udp4');
+  try {
+    await new Promise<void>((resolve, reject) => {
+      sock.once('error', reject);
+      sock.bind(0, () => resolve());
+    });
+    const pending: Array<{ tx: Buffer; resolve: (m: StunMapping) => void }> = [];
+    sock.on('message', (msg) => {
+      for (const p of pending) {
+        const mapped = parseStunMapped(msg, p.tx);
+        if (mapped) p.resolve(mapped);
+      }
+    });
+    const ask = async ([host, port]: [string, number]): Promise<string | null> => {
+      try {
+        const { address } = await dns.lookup(host, 4);
+        const tx = Buffer.from(Array.from({ length: 12 }, () => Math.floor(Math.random() * 256)));
+        const answer = new Promise<StunMapping | null>((resolve) => {
+          pending.push({ tx, resolve });
+          setTimeout(() => resolve(null), 3000);
+        });
+        sock.send(buildStunRequest(tx), port, address);
+        const mapped = await answer;
+        return mapped ? `${mapped.ip}:${mapped.port}` : null;
+      } catch {
+        return null;
+      }
+    };
+    const seen = (await Promise.all(STUN_SERVERS.map(ask))).filter((v): v is string => v !== null);
+    return natVerdict(seen);
+  } catch {
+    return natVerdict([]);
+  } finally {
+    try {
+      sock.close();
+    } catch {
+      /* already closed */
+    }
+  }
 }

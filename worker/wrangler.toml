@@ -1,0 +1,13 @@
+# Jaca anti Janja room server. The name MUST stay "jaca-sala": the app derives the address
+# https://jaca-sala.<your-workers-subdomain>.workers.dev from it.
+name = "jaca-sala"
+main = "src/index.ts"
+compatibility_date = "2025-09-01"
+
+[[durable_objects.bindings]]
+name = "ROOMS"
+class_name = "Room"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room"]

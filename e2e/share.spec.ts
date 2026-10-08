@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { createRoom, joinRoom, launchApp } from './app';
+import { createRoom, joinRoom, launchApp, sounds } from './app';
 
 // Needs a real desktop session: it captures the first screen and watches it from the second instance.
 test('sharing a screen: the guest sees "AO VIVO", watches the video with audio, and it stops cleanly', async () => {
@@ -19,6 +19,9 @@ test('sharing a screen: the guest sees "AO VIVO", watches the video with audio, 
     const anaOnGuest = guest.page.locator('.peer.live', { hasText: 'Ana' });
     await expect(anaOnGuest).toBeVisible();
     await expect(anaOnGuest.getByText('AO VIVO')).toBeVisible();
+    // sound cues: you hear yours when you start sharing, your friend hears theirs
+    expect(await sounds(host.page)).toContain('self-share-start');
+    await expect.poll(() => sounds(guest.page)).toContain('peer-share-start');
 
     await anaOnGuest.click();
     const video = guest.page.locator('video');
@@ -117,7 +120,12 @@ test('sharing a screen: the guest sees "AO VIVO", watches the video with audio, 
     await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.srcObject === null)).toBe(true);
     await expect(host.page.locator('.viewers-count')).toHaveText('0');
 
+    // the quality change above re-announces the share but must not replay the "friend started sharing" sound
+    expect((await sounds(guest.page)).filter((s) => s === 'peer-share-start')).toHaveLength(1);
+
     await host.page.getByRole('button', { name: 'Parar de compartilhar' }).click();
+    await expect.poll(() => sounds(host.page)).toContain('self-share-stop');
+    await expect.poll(() => sounds(guest.page)).toContain('peer-share-stop');
     await expect(guest.page.locator('.peer.live')).toHaveCount(0);
     await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.srcObject === null)).toBe(true);
   } finally {

@@ -1,4 +1,4 @@
-import type { AppConfig, AudioStartResult, CaptureSource, ConnectivityResult, RoomInfo, UpdateState } from '../shared/protocol';
+import type { AppConfig, AudioStartResult, CaptureSource, ConnectivityResult, NatTestResult, RoomInfo, UpdateState, VpnCandidate, WorkerSaveResult, WorkerStatus } from '../shared/protocol';
 
 declare global {
   interface Window {
@@ -8,6 +8,13 @@ declare global {
       createRoom(roomName: string): Promise<RoomInfo>;
       closeRoom(): Promise<void>;
       testConnectivity(): Promise<ConnectivityResult>;
+      detectVpns(): Promise<VpnCandidate[]>;
+      natTest(): Promise<NatTestResult>;
+      workerStatus(): Promise<WorkerStatus>;
+      saveWorker(subdomain: string, key: string): Promise<WorkerSaveResult>;
+      testWorker(): Promise<WorkerSaveResult>;
+      clearWorker(): Promise<void>;
+      workerWsBase(subdomain: string): Promise<string | null>;
       listSources(kind?: 'screens' | 'windows'): Promise<CaptureSource[]>;
       startAudio(sourceId: string | null): Promise<AudioStartResult>;
       stopAudio(): Promise<void>;

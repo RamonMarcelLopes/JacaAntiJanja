@@ -7,3 +7,5 @@ helper/**/bin
 helper/**/obj
 test-results
 playwright-report
+.wrangler
+worker/.dev.vars

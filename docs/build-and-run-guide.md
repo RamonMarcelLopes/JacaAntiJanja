@@ -121,3 +121,41 @@ F12 (or Ctrl+Shift+I) opens the DevTools. Stop it with Ctrl+C or by closing the 
 `pnpm dev:room` is the same with `--room`: after every reload or restart the window goes to the room screen by itself (it
 creates a room, typing the name "Jaca" first if the dev profile has none). The dev window also listens on the DevTools port 9333
 (localhost only), which is what the script uses to do that.
+
+### Release notes format
+
+Same layout as the Jaca Downloader releases (markdown, English first, no emojis, high level):
+
+```
+## What's new
+
+- one short bullet per change
+
+One closing sentence (installed apps update inside the app; new users install the Setup).
+
+## Novidades (pt-BR)
+
+- the same bullets in Portuguese
+
+The same closing sentence in Portuguese.
+```
+
+Without the `##` headings GitHub shows one dense block of text, which is what the first releases looked like.
+
+Every release also carries a **How to install** section (English) and **Como instalar** (under the pt-BR block): 1) download
+`JacaAntiJanja-Setup-X.Y.Z.exe` (use the real version) from the Assets, 2) run it (one click, per user, no administrator), 3) the Setup is unsigned so
+SmartScreen may warn: More info, then Run anyway (Mais informacoes, Executar assim mesmo), 4) already installed: nothing to
+download, the app updates itself; then a requirements line (Windows 10 2004+ or 11, 64-bit; the first room asks once for the
+firewall permission; how to uninstall, which also removes the app data). Use the real file name of that version.
+
+## Cloudflare room server (optional mode)
+
+Rooms can also connect through a Worker published in the room owner's own Cloudflare account, so no VPN is needed (the default stays
+"Direto"). Everything about it is in [cloudflare-room-server.md](cloudflare-room-server.md). Developer commands:
+
+- `pnpm worker:dev`: runs the Worker locally on http://127.0.0.1:8799 (no account needed).
+- `pnpm test:worker`: starts it and runs the protocol tests (`worker/test`) against the real Workers runtime.
+- `pnpm typecheck:worker` and `pnpm worker:build` (a dry-run bundle, nothing is published).
+- `pnpm worker:deploy`: publishes it to the logged-in Cloudflare account and prints the account name and the owner key to paste in the app.
+- `e2e/cloudflare.spec.ts` starts its own local Worker (port 8798) and points the app at it with `JACA_WORKER_URL`; `JACA_FAKE_VPNS`
+  fakes the network adapters list. Both only work in development builds, never in the installed app.

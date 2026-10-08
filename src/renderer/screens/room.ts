@@ -1,6 +1,7 @@
 import { AppConfig, BITRATE_MBPS, CaptureSource, Fps, Resolution, RoomInfo, ShareInfo, ShareMode } from '../../shared/protocol';
 import { avatarEl, dismiss, dismissOnBackdrop, h, resizeAvatar, toast } from '../dom';
 import { formatDuration } from '../../shared/time';
+import { speakerSvg } from '../icons';
 import { customSelect } from '../select';
 import { PeerView, Session } from '../session';
 
@@ -14,13 +15,6 @@ export interface RoomContext {
 
 const EYE_SVG =
   '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>';
-
-/** Speaker icon that follows the volume: crossed out at 0, one wave when low, two waves when high. */
-function speakerSvg(volume: number): string {
-  const cone = '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>';
-  const inner = volume === 0 ? '<line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>' : volume < 50 ? '<path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>' : '<path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>';
-  return `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${cone}${inner}</svg>`;
-}
 
 // "Stop watching": a screen with an X in the middle.
 const SCREEN_X_SVG =

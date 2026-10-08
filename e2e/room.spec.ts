@@ -1,5 +1,5 @@
 import { expect, Page, test } from '@playwright/test';
-import { createRoom, joinRoom, launchApp, PNG_1X1, TestApp } from './app';
+import { createRoom, joinRoom, launchApp, PNG_1X1, sounds, TestApp } from './app';
 
 let host: TestApp;
 let guest: TestApp;
@@ -128,7 +128,7 @@ test('room names keep every letter, collapse repeated spaces and are limited to 
 test('a very long room name is cut to 32 characters', async () => {
   const long = 'Sala super gigante das sextas-feiras de verão';
   await createRoom(host.page, long);
-  const title = await host.page.locator('h1').textContent();
+  const title = await host.page.locator('.room-title').textContent();
   expect(title!.length).toBeLessThanOrEqual(32);
   expect(long.startsWith(title!.trim())).toBe(true);
 });
@@ -254,4 +254,39 @@ test('modals close when you click outside them or press Esc, but not when you cl
   await expect(host.page.getByRole('heading', { name: 'Editar perfil' })).toBeVisible();
   await host.page.locator('.overlay').click({ position: { x: 6, y: 6 } });
   await expect(host.page.locator('.overlay')).toHaveCount(0);
+});
+
+test('sound cues: you enter, someone enters and leaves, you leave', async () => {
+  const code = await createRoom(host.page);
+  await expect.poll(() => sounds(host.page)).toContain('self-join');
+  expect(await sounds(host.page)).not.toContain('peer-join'); // nobody else yet
+
+  await joinRoom(guest.page, code);
+  await expect.poll(() => sounds(guest.page)).toContain('self-join');
+  await expect.poll(() => sounds(host.page)).toContain('peer-join'); // the host hears the guest come in
+  expect(await sounds(guest.page)).not.toContain('peer-join'); // the guest joined, so nobody "entered" for them
+
+  await guest.page.getByRole('button', { name: 'Sair' }).click();
+  await expect.poll(() => sounds(guest.page)).toContain('self-leave');
+  await expect.poll(() => sounds(host.page)).toContain('peer-leave');
+
+  await host.page.getByRole('button', { name: 'Encerrar sala' }).click();
+  await expect.poll(() => sounds(host.page)).toContain('self-leave');
+});
+
+test('a switched-off notification stays silent while the others still play', async () => {
+  const quiet = await launchApp('host-quiet', { name: 'Ana', hostAddressOverride: '127.0.0.1', port: 47854, disabledSounds: ['peer-join', 'peer-leave'] });
+  try {
+    const code = await createRoom(quiet.page);
+    await expect.poll(() => sounds(quiet.page)).toContain('self-join'); // not switched off
+    await joinRoom(guest.page, code);
+    await expect(quiet.page.locator('.peer-name')).toHaveCount(2); // the guest is in the room
+    await guest.page.getByRole('button', { name: 'Sair' }).click();
+    await expect(quiet.page.locator('.peer-name')).toHaveCount(1);
+    const heard = await sounds(quiet.page);
+    expect(heard).not.toContain('peer-join');
+    expect(heard).not.toContain('peer-leave');
+  } finally {
+    await quiet.close();
+  }
 });

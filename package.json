@@ -1,7 +1,7 @@
 {
   "name": "jaca-anti-janja",
   "productName": "Jaca anti Janja",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "P2P screen sharing with system audio, no cloud backend",
   "main": "dist/main/main.js",
   "private": true,
@@ -14,7 +14,12 @@
     "build:audio": "dotnet publish helper/AudioCapture -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o resources/audio",
     "test:e2e": "node build.mjs && playwright test",
     "dev": "node dev.mjs",
-    "dev:room": "node dev.mjs --room"
+    "dev:room": "node dev.mjs --room",
+    "worker:dev": "wrangler dev --config worker/wrangler.toml --var OWNER_KEY:dev-owner-key-1234567890 --port 8799",
+    "worker:deploy": "node scripts/deploy-worker.mjs",
+    "typecheck:worker": "tsc -p worker/tsconfig.json --noEmit",
+    "test:worker": "node worker/test/run.mjs",
+    "worker:build": "wrangler deploy --dry-run --config worker/wrangler.toml --outdir .wrangler/dry"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
@@ -66,6 +71,7 @@
     ]
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261007.1",
     "@fontsource-variable/bricolage-grotesque": "^5.3.0",
     "@fontsource-variable/hanken-grotesk": "^5.3.0",
     "@playwright/test": "^1.64.0",
@@ -75,6 +81,7 @@
     "electron-builder": "^26.15.3",
     "esbuild": "^0.28.2",
     "typescript": "^7.0.2",
+    "wrangler": "^4.148.0",
     "ws": "^8.22.0"
   },
   "dependencies": {

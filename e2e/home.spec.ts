@@ -1,5 +1,7 @@
 import { expect, test } from '@playwright/test';
-import { launchApp, PNG_1X1 } from './app';
+import fs from 'node:fs';
+import path from 'node:path';
+import { launchApp, PNG_1X1, sounds } from './app';
 
 test('first run: typing a name and creating a room works (no stale config)', async () => {
   // No name saved yet, like a fresh install.
@@ -68,7 +70,7 @@ test('settings has a left sidebar with an icon and a name per category, one pane
   try {
     await a.page.getByRole('button', { name: 'Configurações' }).click();
     const tabs = a.page.getByRole('tab');
-    await expect(tabs).toHaveText(['Rede', 'Áudio', 'Transmissão', 'Sobre']);
+    await expect(tabs).toHaveText(['Rede', 'Áudio', 'Notificações', 'Transmissão', 'Sobre']);
     for (const tab of await tabs.all()) await expect(tab.locator('svg')).toHaveCount(1); // every entry has an icon
 
     // the sidebar is on the left of the content
@@ -206,6 +208,58 @@ test('moving between screens slides instead of cutting, both ways', async () => 
     await expect(a.page.getByRole('heading', { name: 'Seu perfil' })).toBeVisible();
     expect(await slides()).toMatch(/enter-from-right/); // coming back from Settings, Home comes in from the right
     expect(await slides()).toMatch(/leave-to-left/);
+  } finally {
+    await a.close();
+  }
+});
+
+test('Settings > Notificações: volume control saved in the config, mute button, and a button to hear each sound', async () => {
+  const a = await launchApp('sons', { name: 'Ramon' });
+  try {
+    const savedVolume = () => JSON.parse(fs.readFileSync(path.join(a.dir, 'config.json'), 'utf8')).soundVolume as number;
+    await a.page.getByRole('button', { name: 'Configurações' }).click();
+    await a.page.getByRole('tab', { name: 'Notificações' }).click();
+    const pct = a.page.locator('.sound-volume .volume-pct');
+    await expect(pct).toHaveText('60%'); // default
+    await expect(a.page.locator('.sound-row')).toHaveCount(8);
+
+    // every row has a play button, which triggers that sound
+    await a.page.getByRole('button', { name: 'Ouvir: Alguém entra na sala' }).click();
+    expect(await sounds(a.page)).toContain('peer-join');
+    await a.page.getByRole('button', { name: 'Ouvir: Você começa a compartilhar' }).click();
+    expect(await sounds(a.page)).toContain('self-share-start');
+
+    // each notification has a switch: off by default? no, all on; turning one off is saved, dims the row, and the play button still previews it
+    const switches = a.page.getByRole('switch');
+    await expect(switches).toHaveCount(8);
+    for (const s of await switches.all()) await expect(s).toHaveAttribute('aria-checked', 'true');
+    const disabledInConfig = () => JSON.parse(fs.readFileSync(path.join(a.dir, 'config.json'), 'utf8')).disabledSounds as string[];
+    await a.page.getByRole('switch', { name: 'Alguém entra na sala' }).click();
+    await expect(a.page.getByRole('switch', { name: 'Alguém entra na sala' })).toHaveAttribute('aria-checked', 'false');
+    await expect(a.page.locator('.sound-row.off')).toHaveCount(1);
+    await expect.poll(disabledInConfig).toEqual(['peer-join']);
+    const before = (await sounds(a.page)).filter((n) => n === 'peer-join').length;
+    await a.page.waitForTimeout(150); // past the 100 ms burst filter
+    await a.page.getByRole('button', { name: 'Ouvir: Alguém entra na sala' }).click();
+    expect((await sounds(a.page)).filter((n) => n === 'peer-join').length).toBe(before + 1); // preview works while it is off
+    await a.page.getByRole('switch', { name: 'Alguém entra na sala' }).click(); // back on
+    await a.page.waitForTimeout(150);
+    expect((await sounds(a.page)).filter((n) => n === 'peer-join').length).toBe(before + 1); // turning it on is silent: only the play button plays
+    await expect(a.page.locator('.sound-row.off')).toHaveCount(0);
+    await expect.poll(disabledInConfig).toEqual([]);
+
+    // moving the slider updates the percentage, plays a sample and is saved
+    await a.page.locator('.sound-volume .volume').fill('35');
+    await expect(pct).toHaveText('35%');
+    await expect.poll(savedVolume).toBe(35);
+
+    // the speaker button mutes and restores the previous level
+    await a.page.getByRole('button', { name: 'Silenciar as notificações' }).click();
+    await expect(pct).toHaveText('0%');
+    await expect.poll(savedVolume).toBe(0);
+    await a.page.getByRole('button', { name: 'Ativar as notificações' }).click();
+    await expect(pct).toHaveText('35%');
+    await expect.poll(savedVolume).toBe(35);
   } finally {
     await a.close();
   }

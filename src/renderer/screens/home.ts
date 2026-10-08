@@ -1,7 +1,7 @@
-import { decodeInvite, encodeInvite } from '../../shared/invite';
+import { encodeCloudInvite, encodeInvite, parseInvite } from '../../shared/invite';
 import { AppConfig, RoomInfo } from '../../shared/protocol';
 import { avatarEl, h, resizeAvatar, toast } from '../dom';
-import { JOIN_ERROR_TEXT, JoinError } from '../signaling-client';
+import { JOIN_ERROR_TEXT, JoinError, UNREACHABLE_CLOUD_TEXT } from '../signaling-client';
 import { Session } from '../session';
 
 export interface HomeContext {
@@ -77,12 +77,16 @@ export function renderHome(ctx: HomeContext): HTMLElement {
       const roomName = roomInput.value.trim();
       await ctx.update({ roomName });
       const room = await window.jaca.createRoom(roomName);
-      const session = await Session.join(`ws://127.0.0.1:${room.port}`, room.token, cfg, true);
+      // Cloudflare mode: the owner's Worker is the room server (the key is inside wsUrl and never shown); direct mode: our own local server
+      const session =
+        room.mode === 'cloudflare'
+          ? await Session.join(room.wsUrl!, 0, cfg, true, room.code, { roomName })
+          : await Session.join(`ws://127.0.0.1:${room.port}`, room.token, cfg, true);
       room.warnings.forEach((w) => toast(w));
       ctx.openRoom(session, room);
     } catch (e: any) {
       await window.jaca.closeRoom();
-      toast(e instanceof JoinError ? (JOIN_ERROR_TEXT[e.code] ?? e.message) : String(e?.message ?? e), 'error');
+      toast(e instanceof JoinError ? (e.code === 'UNREACHABLE' && ctx.cfg.connectionMode === 'cloudflare' ? UNREACHABLE_CLOUD_TEXT : (JOIN_ERROR_TEXT[e.code] ?? e.message)) : String(e?.message ?? e), 'error');
       createBtn.disabled = false;
       createBtn.textContent = 'Criar sala';
     }
@@ -91,7 +95,7 @@ export function renderHome(ctx: HomeContext): HTMLElement {
   async function join(): Promise<void> {
     const cfg = await ensureName();
     if (!cfg) return;
-    const invite = decodeInvite(codeInput.value);
+    const invite = parseInvite(codeInput.value);
     if (!invite) {
       toast('Código de convite inválido.', 'error');
       return;
@@ -99,10 +103,26 @@ export function renderHome(ctx: HomeContext): HTMLElement {
     joinBtn.disabled = true;
     joinBtn.textContent = 'Entrando...';
     try {
-      const session = await Session.join(`ws://${invite.ip}:${invite.port}`, invite.token, cfg, false, encodeInvite(invite));
+      let session: Session;
+      if (invite.kind === 'cloud') {
+        // the address is derived from the code (jaca-sala.<subdomain>.workers.dev); the main process re-checks the subdomain
+        const base = await window.jaca.workerWsBase(invite.subdomain);
+        if (!base) throw new Error('Código de convite inválido.');
+        session = await Session.join(`${base}/ws/${invite.roomId}`, 0, cfg, false, encodeCloudInvite(invite.roomId, invite.subdomain));
+      } else {
+        session = await Session.join(`ws://${invite.ip}:${invite.port}`, invite.token, cfg, false, encodeInvite(invite));
+      }
       ctx.openRoom(session, null);
     } catch (e: any) {
-      toast(e instanceof JoinError ? (JOIN_ERROR_TEXT[e.code] ?? e.message) : 'Falha ao entrar na sala.', 'error');
+      const cloud = invite.kind === 'cloud';
+      toast(
+        e instanceof JoinError
+          ? e.code === 'UNREACHABLE' && cloud
+            ? UNREACHABLE_CLOUD_TEXT
+            : (JOIN_ERROR_TEXT[e.code] ?? e.message)
+          : String(e?.message ?? 'Falha ao entrar na sala.'),
+        'error',
+      );
       joinBtn.disabled = false;
       joinBtn.textContent = 'Entrar';
     }
@@ -163,6 +183,7 @@ export function renderHome(ctx: HomeContext): HTMLElement {
         h('h2', {}, 'Criar sala'),
         h('p', { class: 'muted' }, 'Você vira o host e recebe um código para mandar aos amigos.'),
         roomInput,
+        h('p', { class: 'muted conn-hint', 'data-mode': ctx.cfg.connectionMode === 'cloudflare' ? 'cloudflare' : 'direct' }, ctx.cfg.connectionMode === 'cloudflare' ? 'Conexão: Cloudflare (muda em Configurações > Rede)' : 'Conexão: Direto (VPN) (muda em Configurações > Rede)'),
         createBtn,
       ),
       h('section', { class: 'block' }, h('h2', {}, 'Entrar com código'), h('div', { class: 'row' }, codeInput, joinBtn)),

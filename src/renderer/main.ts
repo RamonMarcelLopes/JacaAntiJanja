@@ -1,5 +1,6 @@
 import { AppConfig, RoomInfo } from '../shared/protocol';
 import { toast } from './dom';
+import { playSound, setDisabledSounds, setSoundVolume } from './sounds';
 import { renderHome } from './screens/home';
 import { renderRoom } from './screens/room';
 import { renderSettings } from './screens/settings';
@@ -51,6 +52,8 @@ function mount(el: HTMLElement, onUnmount?: () => void, direction: Direction = '
 
 async function update(patch: Partial<AppConfig>): Promise<AppConfig> {
   cfg = await window.jaca.setConfig(patch);
+  setSoundVolume(cfg.soundVolume);
+  setDisabledSounds(cfg.disabledSounds);
   return cfg;
 }
 
@@ -98,6 +101,7 @@ function showRoom(session: Session, room: RoomInfo | null): void {
     leave: () => session.leave(),
   });
   session.onEnded = async (reason) => {
+    playSound('self-leave'); // leaving, the room being closed or the connection dropping
     if (session.isHost) await window.jaca.closeRoom();
     if (reason === 'room-closed') toast('A sala foi encerrada pelo host.');
     else if (reason === 'lost') toast('Conexão com a sala perdida.', 'error');
@@ -105,10 +109,13 @@ function showRoom(session: Session, room: RoomInfo | null): void {
   };
   current = 'room';
   mount(view.el, view.dispose, 'forward'); // the room comes in from the right
+  playSound('self-join');
 }
 
 async function boot(): Promise<void> {
   cfg = await window.jaca.getConfig();
+  setSoundVolume(cfg.soundVolume);
+  setDisabledSounds(cfg.disabledSounds);
   initTitlebar();
   initUpdateBanner();
   showHome();

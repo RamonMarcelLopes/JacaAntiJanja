@@ -5,6 +5,19 @@ export const HEARTBEAT_MS = 15000;
 export const DEFAULT_PORT = 47800;
 export const MAX_ROOM_NAME = 32;
 
+/** The sound cues of the app (see renderer/sounds.ts). Each one can be switched off in Settings > Notificações. */
+export const SOUND_NAMES = [
+  'self-join',
+  'self-leave',
+  'peer-join',
+  'peer-leave',
+  'self-share-start',
+  'self-share-stop',
+  'peer-share-start',
+  'peer-share-stop',
+] as const;
+export type SoundName = (typeof SOUND_NAMES)[number];
+
 export type ErrorCode = 'ROOM_FULL' | 'BAD_TOKEN' | 'ROOM_CLOSED' | 'RATE_LIMITED' | 'BAD_REQUEST';
 
 export type Resolution = '720p' | '1080p' | '1440p';
@@ -85,6 +98,16 @@ export interface AppConfig {
   excludeAudioProcess: string;
   /** Last room name typed when creating a room. */
   roomName: string;
+  /** Volume of the sound effects, 0-100. */
+  soundVolume: number;
+  /** Cues switched off by the user. */
+  disabledSounds: SoundName[];
+  /** How rooms connect: "direct" (own server on the host; Radmin/VPN when needed; the default) or "cloudflare" (the owner's Worker). */
+  connectionMode: 'direct' | 'cloudflare';
+  /** workers.dev subdomain of the owner's Cloudflare account (Cloudflare mode). */
+  workerSubdomain: string;
+  /** The owner key, encrypted with the operating system (safeStorage). Never sent to the UI. */
+  workerOwnerKeyEnc: string;
   codec: 'auto' | 'vp9' | 'h264' | 'av1';
   resolution: Resolution;
   fps: Fps;
@@ -105,6 +128,9 @@ export interface RoomInfo {
   token: number;
   upnp: boolean;
   warnings: string[];
+  mode: 'direct' | 'cloudflare';
+  /** Cloudflare mode: the address the host connects to (includes the owner key; never shown). */
+  wsUrl?: string;
 }
 
 export interface ConnectivityResult {
@@ -125,4 +151,28 @@ export interface UpdateState {
   version?: string;
   percent?: number;
   message?: string;
+}
+
+/** A virtual network adapter found on this PC (Radmin VPN, Tailscale, ZeroTier...) and the address it gives this PC. */
+export interface VpnCandidate {
+  name: string;
+  ip: string;
+  kind: string;
+}
+
+export interface NatTestResult {
+  kind: 'cone' | 'symmetric' | 'unknown';
+  message: string;
+  publicIp: string | null;
+  seen: string[];
+}
+
+export interface WorkerStatus {
+  configured: boolean;
+  subdomain: string;
+}
+
+export interface WorkerSaveResult {
+  ok: boolean;
+  message: string;
 }

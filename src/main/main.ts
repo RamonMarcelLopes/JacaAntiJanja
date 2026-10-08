@@ -1,12 +1,13 @@
-import { app, BrowserWindow, clipboard, desktopCapturer, ipcMain, session, shell } from 'electron';
+import { app, BrowserWindow, clipboard, desktopCapturer, ipcMain, safeStorage, session, shell } from 'electron';
+import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
-import { encodeInvite } from '../shared/invite';
-import { AppConfig, CaptureSource, ConnectivityResult, DEFAULT_PORT, MAX_ROOM_NAME, RoomInfo } from '../shared/protocol';
+import { encodeCloudInvite, encodeInvite, isValidSubdomain, roomIdFromBytes, workerHost } from '../shared/invite';
+import { AppConfig, CaptureSource, ConnectivityResult, DEFAULT_PORT, MAX_ROOM_NAME, RoomInfo, SOUND_NAMES } from '../shared/protocol';
 import { startAudio, stopAudio } from './audio';
 import { checkForUpdates, currentUpdateState, initUpdater, installUpdate } from './updater';
-import { detectVpnAddresses, discoverPublicIp, ensureFirewallRule, isPrivateIpv4, localIpv4Addresses, mapPortUpnp, PortMapping, tcpProbe } from './network';
+import { detectVpnAddresses, discoverPublicIp, ensureFirewallRule, isPrivateIpv4, localIpv4Addresses, mapPortUpnp, natMappingTest, PortMapping, tcpProbe } from './network';
 import { SignalingServer } from './signaling';
 
 const DEFAULT_CONFIG: AppConfig = {
@@ -16,6 +17,11 @@ const DEFAULT_CONFIG: AppConfig = {
   hostAddressOverride: '',
   excludeAudioProcess: 'Discord',
   roomName: '',
+  soundVolume: 60,
+  disabledSounds: [],
+  connectionMode: 'direct',
+  workerSubdomain: '',
+  workerOwnerKeyEnc: '',
   codec: 'auto',
   resolution: '1080p',
   fps: 30,
@@ -33,7 +39,10 @@ const configPath = () => path.join(app.getPath('userData'), 'config.json');
 
 function loadConfig(): AppConfig {
   try {
-    return { ...DEFAULT_CONFIG, ...JSON.parse(fs.readFileSync(configPath(), 'utf8')) };
+    const cfg: AppConfig = { ...DEFAULT_CONFIG, ...JSON.parse(fs.readFileSync(configPath(), 'utf8')) };
+    // Cloudflare mode only works with the account name and the owner key; without them the mode is Direto
+    if (cfg.connectionMode === 'cloudflare' && (!cfg.workerSubdomain || !cfg.workerOwnerKeyEnc)) cfg.connectionMode = 'direct';
+    return cfg;
   } catch {
     return { ...DEFAULT_CONFIG };
   }
@@ -43,6 +52,13 @@ function saveConfig(patch: Partial<AppConfig>): AppConfig {
   const next = { ...loadConfig(), ...patch };
   next.name = String(next.name ?? '').slice(0, 24);
   next.roomName = String(next.roomName ?? '').slice(0, MAX_ROOM_NAME);
+  const volume = Number(next.soundVolume);
+  next.soundVolume = Number.isFinite(volume) ? Math.min(100, Math.max(0, Math.round(volume))) : 60;
+  next.disabledSounds = Array.isArray(next.disabledSounds) ? [...new Set(next.disabledSounds.filter((n) => (SOUND_NAMES as readonly string[]).includes(n)))] : [];
+  next.connectionMode = next.connectionMode === 'cloudflare' ? 'cloudflare' : 'direct';
+  const subdomain = String(next.workerSubdomain ?? '').trim().toLowerCase();
+  next.workerSubdomain = isValidSubdomain(subdomain) ? subdomain : '';
+  next.workerOwnerKeyEnc = typeof next.workerOwnerKeyEnc === 'string' ? next.workerOwnerKeyEnc : '';
   const port = Number(next.port);
   next.port = Number.isInteger(port) && port >= 1024 && port <= 65535 ? port : DEFAULT_PORT;
   fs.mkdirSync(path.dirname(configPath()), { recursive: true });
@@ -64,9 +80,64 @@ function cleanRoomName(raw: unknown, hostName: string): string {
   return name || `Sala de ${hostName}`.slice(0, MAX_ROOM_NAME);
 }
 
+// ---------------------------------------------------------------- Cloudflare mode (the room owner's own Worker)
+
+/** What the UI may see of the config: the encrypted owner key is replaced by a flag, so the UI can never read it. */
+function publicConfig(cfg: AppConfig): AppConfig {
+  return { ...cfg, workerOwnerKeyEnc: cfg.workerOwnerKeyEnc ? 'set' : '' };
+}
+
+/** Address of the room server. The real one is derived from the owner's subdomain; development and tests can point it at a local Worker. */
+function workerBase(subdomain: string): { http: string; ws: string } {
+  const local = !app.isPackaged ? process.env.JACA_WORKER_URL : undefined; // e.g. http://127.0.0.1:8799
+  if (local) return { http: local, ws: local.replace(/^http/, 'ws') };
+  const host = workerHost(subdomain);
+  return { http: `https://${host}`, ws: `wss://${host}` };
+}
+
+function readOwnerKey(cfg: AppConfig): string | null {
+  if (!cfg.workerOwnerKeyEnc) return null;
+  try {
+    return safeStorage.decryptString(Buffer.from(cfg.workerOwnerKeyEnc, 'base64'));
+  } catch {
+    return null;
+  }
+}
+
+async function checkWorker(httpBase: string, key: string): Promise<{ ok: boolean; message: string }> {
+  try {
+    const res = await fetch(`${httpBase}/api/check?key=${encodeURIComponent(key)}`, { signal: AbortSignal.timeout(8000) });
+    if (res.ok) return { ok: true, message: 'Worker encontrado e chave correta.' };
+    if (res.status === 401) return { ok: false, message: 'A chave do dono não confere com a do Worker.' };
+    return { ok: false, message: `O endereço respondeu com erro ${res.status}. Confira o nome da conta e se o Worker foi publicado.` };
+  } catch {
+    return { ok: false, message: 'Não consegui alcançar o Worker. Confira o nome da conta, a internet e se o Worker foi publicado.' };
+  }
+}
+
+async function createCloudRoom(cfg: AppConfig): Promise<RoomInfo> {
+  const key = readOwnerKey(cfg);
+  if (!cfg.workerSubdomain || !key) throw new Error('Configure o seu Worker em Configurações > Rede (Cloudflare) antes de criar uma sala neste modo.');
+  const base = workerBase(cfg.workerSubdomain);
+  const check = await checkWorker(base.http, key);
+  if (!check.ok) throw new Error(check.message);
+  const roomId = roomIdFromBytes(randomBytes(7));
+  return {
+    code: encodeCloudInvite(roomId, cfg.workerSubdomain),
+    ip: workerHost(cfg.workerSubdomain),
+    port: 443,
+    token: 0,
+    upnp: false,
+    warnings: [],
+    mode: 'cloudflare',
+    wsUrl: `${base.ws}/ws/${roomId}?create=1&key=${encodeURIComponent(key)}`,
+  };
+}
+
 async function createRoom(requestedName: unknown): Promise<RoomInfo> {
   await closeRoom();
   const cfg = loadConfig();
+  if (cfg.connectionMode === 'cloudflare') return createCloudRoom(cfg);
   const warnings: string[] = [];
   const srv = new SignalingServer(cfg.port, cleanRoomName(requestedName, cfg.name));
   try {
@@ -110,7 +181,7 @@ async function createRoom(requestedName: unknown): Promise<RoomInfo> {
 
   const code = encodeInvite({ ip, port: cfg.port, token: srv.token });
   srv.inviteCode = code; // everyone in the room gets it in the welcome message
-  return { code, ip, port: cfg.port, token: srv.token, upnp: !!mapping, warnings };
+  return { code, ip, port: cfg.port, token: srv.token, upnp: !!mapping, warnings, mode: 'direct' };
 }
 
 async function testConnectivity(): Promise<ConnectivityResult> {
@@ -158,8 +229,49 @@ async function listSources(kind?: unknown): Promise<CaptureSource[]> {
 }
 
 function registerIpc(): void {
-  ipcMain.handle('config:get', () => loadConfig());
-  ipcMain.handle('config:set', (_e, patch: Partial<AppConfig>) => saveConfig(patch));
+  ipcMain.handle('config:get', () => publicConfig(loadConfig()));
+  // the Worker address and owner key can only change through worker:save / worker:clear (which check them first)
+  ipcMain.handle('config:set', (_e, patch: Partial<AppConfig>) => {
+    const { workerSubdomain: _s, workerOwnerKeyEnc: _k, ...allowed } = patch ?? {};
+    return publicConfig(saveConfig(allowed));
+  });
+  ipcMain.handle('worker:status', () => {
+    const cfg = loadConfig();
+    return { configured: !!(cfg.workerSubdomain && cfg.workerOwnerKeyEnc), subdomain: cfg.workerSubdomain };
+  });
+  ipcMain.handle('worker:save', async (_e, subdomainRaw: unknown, keyRaw: unknown) => {
+    const subdomain = String(subdomainRaw ?? '').trim().toLowerCase();
+    const key = String(keyRaw ?? '').trim();
+    if (!isValidSubdomain(subdomain)) return { ok: false, message: 'O nome da conta só pode ter letras minúsculas, números e hífen (como aparece em seu-nome.workers.dev).' };
+    if (key.length < 16 || key.length > 200) return { ok: false, message: 'A chave do dono parece incompleta. Cole exatamente o que o comando de publicação mostrou.' };
+    if (!safeStorage.isEncryptionAvailable()) return { ok: false, message: 'O Windows não liberou a criptografia para guardar a chave com segurança.' };
+    const check = await checkWorker(workerBase(subdomain).http, key);
+    if (!check.ok) return check;
+    saveConfig({ workerSubdomain: subdomain, workerOwnerKeyEnc: safeStorage.encryptString(key).toString('base64') });
+    return { ok: true, message: 'Worker conectado. A chave foi guardada criptografada neste PC.' };
+  });
+  ipcMain.handle('worker:test', async () => {
+    const cfg = loadConfig();
+    const key = readOwnerKey(cfg);
+    if (!cfg.workerSubdomain || !key) return { ok: false, message: 'Nenhum Worker configurado ainda.' };
+    return checkWorker(workerBase(cfg.workerSubdomain).http, key);
+  });
+  ipcMain.handle('worker:clear', () => {
+    saveConfig({ workerSubdomain: '', workerOwnerKeyEnc: '', connectionMode: 'direct' });
+  });
+  ipcMain.handle('worker:ws-base', (_e, subdomain: unknown) => (typeof subdomain === 'string' && isValidSubdomain(subdomain) ? workerBase(subdomain).ws : null));
+  ipcMain.handle('net:detect-vpns', () => {
+    const fake = !app.isPackaged ? process.env.JACA_FAKE_VPNS : undefined; // tests only
+    if (fake) {
+      try {
+        return JSON.parse(fake);
+      } catch {
+        /* fall through to the real detection */
+      }
+    }
+    return detectVpnAddresses();
+  });
+  ipcMain.handle('net:nat-test', () => natMappingTest());
   ipcMain.handle('room:create', (_e, roomName: string) => createRoom(roomName));
   ipcMain.handle('room:close', () => closeRoom());
   ipcMain.handle('net:test', () => testConnectivity());

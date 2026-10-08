@@ -16,11 +16,16 @@ export interface TestApp {
  * Starts one instance of the built app (run `node build.mjs` first) with its own user-data folder, so two
  * instances can run side by side. `config` pre-seeds config.json; omit it to behave like a first run.
  */
-export async function launchApp(label: string, config?: Record<string, unknown>): Promise<TestApp> {
+export async function launchApp(label: string, config?: Record<string, unknown>, env: Record<string, string> = {}): Promise<TestApp> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `jaj-e2e-${label}-`));
   if (config) fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify(config));
-  const app = await electron.launch({ args: [root, `--user-data-dir=${dir}`] });
+  const app = await electron.launch({ args: [root, `--user-data-dir=${dir}`], env: { ...(process.env as Record<string, string>), ...env } });
   const page = await app.firstWindow();
+  // every sound cue is announced on window ("jaca-sound"), so the tests can tell which sounds were triggered
+  await page.evaluate(() => {
+    (window as any).__sounds = [];
+    window.addEventListener('jaca-sound', (e) => (window as any).__sounds.push((e as CustomEvent).detail));
+  });
   await expect(page.getByRole('heading', { name: 'Seu perfil' })).toBeVisible();
   return {
     app,
@@ -32,6 +37,9 @@ export async function launchApp(label: string, config?: Record<string, unknown>)
     },
   };
 }
+
+/** Names of the sound cues triggered so far in this window, in order. */
+export const sounds = (page: Page): Promise<string[]> => page.evaluate(() => [...((window as any).__sounds as string[])]);
 
 /** Creates a room as the host and returns its invite code. */
 export async function createRoom(host: Page, roomName?: string): Promise<string> {

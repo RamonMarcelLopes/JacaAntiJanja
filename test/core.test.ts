@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { WebSocket } from 'ws';
-import { decodeInvite, encodeInvite } from '../src/shared/invite';
+import { decodeInvite, encodeCloudInvite, encodeInvite, isValidRoomId, parseInvite, roomIdFromBytes, workerHost } from '../src/shared/invite';
 import { formatDuration } from '../src/shared/time';
-import { buildStunRequest, isCgnatRange, isPrivateIpv4, parseStunResponse } from '../src/main/network';
+import { buildStunRequest, classifyVpnInterfaces, isCgnatRange, isPrivateIpv4, natVerdict, parseStunMapped, parseStunResponse } from '../src/main/network';
 import { SignalingServer } from '../src/main/signaling';
 
 test('invite code round-trips and is 16 chars in 4 groups', () => {
@@ -263,4 +263,93 @@ test('signaling: welcome reports how long the room has been open', async () => {
   } finally {
     srv.stop();
   }
+});
+
+test('Cloudflare invite codes round-trip, tolerate sloppy typing and keep the direct codes working', () => {
+  const id = roomIdFromBytes(Uint8Array.from([1, 2, 3, 4, 5, 6, 7]));
+  assert.equal(id.length, 10);
+  assert.ok(isValidRoomId(id));
+  assert.equal(id, roomIdFromBytes(Uint8Array.from([1, 2, 3, 4, 5, 6, 7, 99]))); // only the first 7 bytes count
+  assert.notEqual(id, roomIdFromBytes(Uint8Array.from([7, 6, 5, 4, 3, 2, 1])));
+  const code = encodeCloudInvite(id, 'ramonlopes');
+  assert.match(code, /^[0-9A-Z]{5}-[0-9A-Z]{5}@ramonlopes$/);
+  assert.deepEqual(parseInvite(code), { kind: 'cloud', roomId: id, subdomain: 'ramonlopes' });
+  assert.deepEqual(parseInvite('  ' + code.toLowerCase().replace('-', ' ') + '  '), { kind: 'cloud', roomId: id, subdomain: 'ramonlopes' });
+  assert.deepEqual(parseInvite(code.replace('@ramonlopes', ' @ RamonLopes')), { kind: 'cloud', roomId: id, subdomain: 'ramonlopes' });
+  assert.equal(workerHost('ramonlopes'), 'jaca-sala.ramonlopes.workers.dev');
+
+  const direct = { ip: '201.17.5.250', port: 47800, token: 0xdeadbeef };
+  assert.deepEqual(parseInvite(encodeInvite(direct)), { kind: 'direct', ...direct });
+});
+
+test('invite codes that could point somewhere else are refused', () => {
+  const good = 'ABCDE-FGHJK';
+  assert.notEqual(parseInvite(good + '@ok-name'), null);
+  for (const bad of [
+    good + '@evil.com', // a dot would let the code choose the whole host
+    good + '@localhost:8080',
+    good + '@a/b',
+    good + '@-start',
+    good + '@end-',
+    good + '@',
+    good + '@' + 'a'.repeat(64), // longer than a DNS label
+    'ABCDE-FGHJ@ramon', // room id too short
+    'ABCDE-FGHJKL@ramon', // too long
+    'ABCDE-FGHJU@ramon', // U is not in the alphabet
+    '@ramon',
+    'not a code @ ramon',
+  ]) {
+    assert.equal(parseInvite(bad), null, 'must refuse: ' + bad);
+  }
+  assert.throws(() => encodeCloudInvite('SHORT', 'ramon'));
+  assert.throws(() => encodeCloudInvite('ABCDEFGHJK', 'evil.com'));
+});
+
+test('VPN and mesh adapters are recognised by name and listed once per address', () => {
+  const v4 = (address: string, internal = false) => ({ address, family: 'IPv4', internal }) as never;
+  const found = classifyVpnInterfaces({
+    Ethernet: [v4('192.168.0.5')],
+    'Radmin VPN': [v4('26.218.158.49')],
+    'vEthernet (WSL)': [v4('172.28.64.1')],
+    Tailscale: [v4('100.101.102.103'), { address: 'fe80::1', family: 'IPv6', internal: false } as never],
+    ZeroTier: [v4('10.147.1.2'), v4('10.147.1.2')], // the same address twice
+    'Loopback Pseudo-Interface 1': [v4('127.0.0.1', true)],
+    'My WireGuard Tunnel': [v4('10.0.0.2', true)], // internal ones are ignored
+  });
+  assert.deepEqual(
+    found.map((f) => [f.kind, f.ip]),
+    [['Radmin VPN', '26.218.158.49'], ['Tailscale', '100.101.102.103'], ['ZeroTier', '10.147.1.2']],
+  );
+});
+
+test('NAT verdict: the same public port everywhere is cone, different ports are symmetric, too few answers is unknown', () => {
+  const same = natVerdict(['1.2.3.4:5000', '1.2.3.4:5000', '1.2.3.4:5000']);
+  assert.equal(same.kind, 'cone');
+  assert.equal(same.publicIp, '1.2.3.4');
+  assert.equal(natVerdict(['1.2.3.4:5000', '1.2.3.4:5001']).kind, 'symmetric');
+  assert.equal(natVerdict(['1.2.3.4:5000']).kind, 'unknown');
+  assert.equal(natVerdict([]).kind, 'unknown');
+  assert.equal(natVerdict([]).publicIp, null);
+});
+
+test('a STUN response yields the public port as well as the address', () => {
+  const tx = Buffer.alloc(12, 3);
+  const cookie = 0x2112a442;
+  const body = Buffer.alloc(12);
+  body.writeUInt16BE(0x0020, 0);
+  body.writeUInt16BE(8, 2);
+  body[5] = 0x01;
+  body.writeUInt16BE(40123 ^ (cookie >>> 16), 6);
+  const c = Buffer.alloc(4);
+  c.writeUInt32BE(cookie);
+  [198, 51, 100, 7].forEach((b, i) => (body[8 + i] = b ^ c[i]));
+  const head = Buffer.alloc(20);
+  head.writeUInt16BE(0x0101, 0);
+  head.writeUInt16BE(body.length, 2);
+  head.writeUInt32BE(cookie, 4);
+  tx.copy(head, 8);
+  const msg = Buffer.concat([head, body]);
+  assert.deepEqual(parseStunMapped(msg, tx), { ip: '198.51.100.7', port: 40123 });
+  assert.equal(parseStunResponse(msg, tx), '198.51.100.7');
+  assert.equal(parseStunMapped(msg, Buffer.alloc(12, 4)), null);
 });

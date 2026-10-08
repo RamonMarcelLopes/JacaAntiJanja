@@ -2,6 +2,7 @@ import { AppConfig, Message, PeerInfo, RESOLUTIONS, ShareInfo } from '../shared/
 import { startNativeAudio, NativeAudio } from './rtc/native-audio';
 import { PeerManager, Quality } from './rtc/peer-manager';
 import { SignalingClient } from './signaling-client';
+import { playSound, SoundName } from './sounds';
 
 export interface PeerView extends PeerInfo {
   quality: Quality;
@@ -38,9 +39,9 @@ export class Session {
     readonly isHost: boolean,
   ) {}
 
-  static async join(url: string, token: number, cfg: AppConfig, isHost: boolean, joinCode = ''): Promise<Session> {
+  static async join(url: string, token: number, cfg: AppConfig, isHost: boolean, joinCode = '', options: { roomName?: string } = {}): Promise<Session> {
     const sig = new SignalingClient();
-    const welcome = await sig.connect(url, token, cfg.name, cfg.avatar);
+    const welcome = await sig.connect(url, token, cfg.name, cfg.avatar, options);
     const s = new Session(sig, welcome.peerId, isHost);
     s.roomName = welcome.roomName ?? '';
     // older hosts do not send the code: fall back to the one this person typed to get in
@@ -98,6 +99,15 @@ export class Session {
     return this.sharing && !this.audioIsolated;
   }
 
+  /**
+   * Sound cue for something somebody else did. Muted while you share a whole screen: the capture includes this app's own output, so the
+   * cue would travel to everybody in the stream (sharing a single window isolates the audio and lifts this).
+   */
+  private cue(name: SoundName): void {
+    if (this.muteIncoming) return;
+    playSound(name);
+  }
+
   me(): PeerView {
     return this.peers.get(this.selfId)!;
   }
@@ -108,6 +118,7 @@ export class Session {
         const p = msg.payload as PeerInfo;
         this.peers.set(p.peerId, { ...p, quality: 'unknown', rtt: null });
         this.onNotice(`${p.name} entrou na sala.`, 'info');
+        this.cue('peer-join');
         break;
       }
       case 'peer-left': {
@@ -115,7 +126,10 @@ export class Session {
         const name = this.peers.get(id)?.name;
         this.peers.delete(id);
         this.pm.peerLeft(id);
-        if (name) this.onNotice(`${name} saiu da sala.`, 'info');
+        if (name) {
+          this.onNotice(`${name} saiu da sala.`, 'info');
+          this.cue('peer-leave');
+        }
         break;
       }
       case 'peer-updated': {
@@ -129,12 +143,19 @@ export class Session {
       }
       case 'share-started': {
         const p = msg.from ? this.peers.get(msg.from) : undefined;
-        if (p) p.share = msg.payload as ShareInfo;
+        if (p) {
+          const started = !p.share; // the same message also announces quality changes, which must stay silent
+          p.share = msg.payload as ShareInfo;
+          if (started) this.cue('peer-share-start');
+        }
         break;
       }
       case 'share-stopped': {
         const p = msg.from ? this.peers.get(msg.from) : undefined;
-        if (p) p.share = null;
+        if (p) {
+          if (p.share) this.cue('peer-share-stop');
+          p.share = null;
+        }
         if (msg.from) this.pm.peerStoppedSharing(msg.from);
         break;
       }
@@ -191,6 +212,8 @@ export class Session {
       video: { width: { ideal: width }, height: { ideal: height }, frameRate: { ideal: info.fps } },
       audio: true,
     });
+    // Capture is granted. The helper that records the audio only starts after this, so the cue does not end up in the stream.
+    playSound('self-share-start');
     const audio = await window.jaca.startAudio(sourceId);
     // only problems are shown next to the controls; a working capture needs no announcement
     this.audioNote = audio.ok ? '' : audio.message;
@@ -230,7 +253,7 @@ export class Session {
     this.onChange();
   }
 
-  stopSharing(): void {
+  stopSharing(silent = false): void {
     if (!this.sharing) return;
     this.pm.stopShare();
     this.native?.stop();
@@ -245,6 +268,7 @@ export class Session {
       this.viewing = null;
       this.stream = null;
     }
+    if (!silent) playSound('self-share-stop'); // not when leaving the room: the leave sound covers that
     this.onChange();
   }
 
@@ -255,7 +279,7 @@ export class Session {
   private finish(reason: EndReason): void {
     if (this.ended) return;
     this.ended = true;
-    this.stopSharing();
+    this.stopSharing(true);
     this.pm.close();
     this.sig.close();
     this.onEnded(reason);
