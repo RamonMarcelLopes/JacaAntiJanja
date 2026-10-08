@@ -13,7 +13,7 @@ declare global {
       workerStatus(): Promise<WorkerStatus>;
       saveWorker(subdomain: string, key: string): Promise<WorkerSaveResult>;
       testWorker(): Promise<WorkerSaveResult>;
-      workerReachable(subdomain: string): Promise<boolean>;
+      workerReachable(subdomain: string): Promise<{ ok: boolean; detail: string }>;
       openWorkerDeploy(): Promise<void>;
       clearWorker(): Promise<void>;
       workerWsBase(subdomain: string): Promise<string | null>;

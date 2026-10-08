@@ -275,13 +275,15 @@ function registerIpc(): void {
     return { ok: true, message: 'Worker conectado. A chave foi guardada criptografada neste PC.' };
   });
   // plain HTTPS check of a Worker address (used to explain why a room could not be reached); only valid subdomains, only the health page
-  ipcMain.handle('worker:reach', async (_e, subdomain: unknown) => {
-    if (typeof subdomain !== 'string' || !isValidSubdomain(subdomain)) return false;
+  ipcMain.handle('worker:reach', async (_e, subdomain: unknown): Promise<{ ok: boolean; detail: string }> => {
+    if (typeof subdomain !== 'string' || !isValidSubdomain(subdomain)) return { ok: false, detail: 'endereço inválido' };
     try {
-      const res = await electronNet.fetch(`${workerBase(subdomain).http}/health`, { signal: AbortSignal.timeout(6000) });
-      return res.ok;
-    } catch {
-      return false;
+      const res = await electronNet.fetch(`${workerBase(subdomain).http}/health`, { signal: AbortSignal.timeout(8000) });
+      return { ok: res.ok, detail: res.ok ? '' : `resposta HTTP ${res.status}` };
+    } catch (e: any) {
+      // Chromium's error name (net::ERR_NAME_NOT_RESOLVED, net::ERR_CERT_..., net::ERR_PROXY_..., net::ERR_CONNECTION_...) says what is in the way
+      const text = String(e?.cause?.message ?? e?.message ?? e);
+      return { ok: false, detail: /net::ERR_[A-Z_]+/.exec(text)?.[0] ?? (e?.name === 'TimeoutError' ? 'tempo esgotado' : text.slice(0, 120)) };
     }
   });
   ipcMain.handle('worker:open-deploy', () => shell.openExternal(WORKER_DEPLOY_URL));
@@ -434,6 +436,9 @@ if (!gotLock) {
     }
   });
   app.whenReady().then(() => {
+    // Some PCs cannot resolve workers.dev through the Windows DNS (net::ERR_NAME_NOT_RESOLVED) although the browser can, because the browser has its own
+    // secure DNS. The app does the same: it asks Cloudflare's DNS over HTTPS first and falls back to the system DNS when that is not possible.
+    app.configureHostResolver({ enableBuiltInResolver: true, secureDnsMode: 'automatic', secureDnsServers: ['https://cloudflare-dns.com/dns-query'] });
     registerIpc();
     setupSession();
     createWindow();

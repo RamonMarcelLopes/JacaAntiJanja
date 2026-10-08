@@ -8,10 +8,11 @@ export async function diagnoseCloud(wsBase: string, subdomain: string): Promise<
   if (await webSocketWorks(wsBase)) {
     return 'A conexão com a Cloudflare funciona neste PC, então o problema não é a sua rede. Provavelmente a sala não está aberta agora ou o código mudou: peça ao dono para criar a sala de novo e mandar o código atual.';
   }
-  if (await window.jaca.workerReachable(subdomain)) {
+  const reach = await window.jaca.workerReachable(subdomain);
+  if (reach.ok) {
     return 'Este PC alcança a Cloudflare, mas a conexão da sala (WebSocket) está sendo bloqueada. Costuma ser a proteção web do antivírus, um firewall ou a rede. Tente outra rede (hotspot do celular) ou desative a proteção web do antivírus para o Jaca anti Janja.';
   }
-  return 'Este PC não consegue alcançar o servidor da Cloudflare (workers.dev). Confira a internet; se ela estiver ok, troque o DNS do Windows para 1.1.1.1 ou veja se a rede ou o antivírus bloqueia a Cloudflare.';
+  return `Este PC não consegue alcançar o servidor da Cloudflare (workers.dev). Confira a internet; se ela estiver ok, troque o DNS do Windows para 1.1.1.1 ou veja se a rede, o antivírus ou o firewall bloqueia o Jaca anti Janja. Detalhe técnico: ${reach.detail || 'sem detalhe'}.`;
 }
 
 /** Opens a WebSocket to a room id nobody created: a working Worker answers "room closed", which proves the whole path works. */
