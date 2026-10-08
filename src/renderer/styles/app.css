@@ -381,6 +381,12 @@ button.ghost:hover:not(:disabled) { color: var(--bone); border-color: var(--line
 .player-bar .icon-btn { color: rgba(255, 255, 255, 0.85); }
 .player-bar .icon-btn:hover:not(:disabled) { color: #fff; }
 .player:fullscreen { border: 0; border-radius: 0; }
+.mirror-note { display: none; position: absolute; inset: 0; z-index: 1; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 24px; text-align: center; background: var(--husk); pointer-events: none; }
+.mirror-note strong { font-size: 22px; }
+.mirror-note span { color: var(--bone-dim); max-width: 460px; }
+.player.own-screen:fullscreen .mirror-note { display: flex; }
+.player.own-screen:fullscreen video { visibility: hidden; }
+.player-bar { z-index: 2; }
 .player:fullscreen .player-bar { padding: 56px 32px 24px; gap: 14px; }
 .player:fullscreen .player-title { font-size: 20px; }
 .player-bar { transition: opacity 0.25s; }
@@ -516,6 +522,15 @@ video::-webkit-media-controls, video::-webkit-media-controls-enclosure, video::-
 .code-chip code { font-family: var(--font-display); font-size: 17px; font-weight: 600; letter-spacing: 0.06em; color: var(--pod); }
 
 /* ---------- share dialog */
+.crop-overlay { z-index: 20; }
+.dialog.crop-dialog { display: grid; gap: 12px; justify-items: center; width: 430px; padding: 28px; box-sizing: border-box; }
+.dialog.crop-dialog h2, .dialog.crop-dialog p { margin: 0; justify-self: start; }
+.crop-frame { position: relative; overflow: hidden; border-radius: 50%; background: var(--husk); border: 2px solid var(--line); cursor: grab; touch-action: none; user-select: none; }
+.crop-frame.dragging { cursor: grabbing; }
+.crop-img { position: absolute; max-width: none; pointer-events: none; user-select: none; }
+.crop-zoom-row { display: flex; align-items: center; gap: 10px; width: 100%; }
+.crop-zoom { flex: 1; width: auto; }
+.crop-actions { justify-content: flex-end; width: 100%; }
 .overlay { position: fixed; inset: 0; background: rgba(12, 10, 7, 0.72); display: grid; place-items: center; z-index: 10; }
 .dialog {
   background: var(--husk);
@@ -699,9 +714,9 @@ video::-webkit-media-controls, video::-webkit-media-controls-enclosure, video::-
 .switch:hover:not(:disabled) { border-color: var(--pod); }
 @media (prefers-reduced-motion: reduce) { .switch, .switch::after, .sound-row > span { transition: none; } }
 
-.conn-hint { font-size: 13px; margin: -4px 0 2px; display: flex; align-items: center; gap: 8px; }
-.conn-hint::before { content: ''; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--bone-dim); }
-.conn-hint[data-mode='cloudflare']::before { background: #f6821f; }
+.hero-foot { flex-wrap: wrap; }
+.conn-mode { margin: 0 0 0 auto; display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--bone); }
+.conn-badge { padding: 4px 12px; border-radius: 999px; background: rgba(245, 158, 40, 0.6); border: 1px solid rgba(176, 98, 10, 0.85); color: #fff; font-weight: 700; animation: pop-in 0.3s ease-out; }
 
 /* Settings > Rede */
 .mode-pane { display: grid; gap: 4px; margin-top: 16px; }

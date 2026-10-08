@@ -93,6 +93,7 @@ test('profile changes made inside the room reach the others immediately', async 
   const dialog = guest.page.locator('.profile-dialog');
 
   await dialog.locator('input[type=file]').setInputFiles({ name: 'foto.png', mimeType: 'image/png', buffer: PNG_1X1 });
+  await guest.page.getByRole('button', { name: 'Usar esta foto' }).click();
   await expect(host.page.locator('.peer', { hasText: 'Bia' }).locator('img')).toBeVisible();
 
   await dialog.locator('input[type=text]').fill('Bianca');

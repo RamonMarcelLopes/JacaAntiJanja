@@ -1,6 +1,7 @@
 import { encodeCloudInvite, encodeInvite, parseInvite } from '../../shared/invite';
 import { AppConfig, RoomInfo } from '../../shared/protocol';
-import { avatarEl, h, resizeAvatar, toast } from '../dom';
+import { cropAvatar } from '../avatar-crop';
+import { avatarEl, h, toast } from '../dom';
 import { JOIN_ERROR_TEXT, JoinError, UNREACHABLE_CLOUD_TEXT } from '../signaling-client';
 import { Session } from '../session';
 
@@ -32,7 +33,9 @@ export function renderHome(ctx: HomeContext): HTMLElement {
       fileInput.value = '';
       if (!file) return;
       try {
-        await ctx.update({ avatar: await resizeAvatar(file) });
+        const avatar = await cropAvatar(file);
+        if (!avatar) return;
+        await ctx.update({ avatar });
         drawAvatar();
       } catch {
         toast('Não foi possível ler essa imagem.', 'error');
@@ -140,7 +143,13 @@ export function renderHome(ctx: HomeContext): HTMLElement {
       { class: 'hero' },
       h('h1', { class: 'wordmark' }, h('span', { class: 'big' }, 'Jaca'), h('span', { class: 'small' }, 'anti Janja')),
       h('p', { class: 'tagline' }, 'Divida sua tela e o som do PC com os amigos. A conexão é direta, sem servidor no meio.'),
-      h('div', { class: 'hero-foot' }, h('button', { onclick: ctx.openSettings }, 'Configurações')),
+      h(
+        'div',
+        { class: 'hero-foot' },
+        h('button', { onclick: ctx.openSettings }, 'Configurações'),
+        // read-only: the mode is changed in Configurações > Rede
+        h('p', { class: 'conn-mode' }, 'Modo de conexão: ', h('span', { class: 'conn-badge', 'data-mode': ctx.cfg.connectionMode === 'cloudflare' ? 'cloudflare' : 'direct' }, ctx.cfg.connectionMode === 'cloudflare' ? 'Cloudflare' : 'VPN')),
+      ),
     ),
     h(
       'main',
@@ -183,7 +192,6 @@ export function renderHome(ctx: HomeContext): HTMLElement {
         h('h2', {}, 'Criar sala'),
         h('p', { class: 'muted' }, 'Você vira o host e recebe um código para mandar aos amigos.'),
         roomInput,
-        h('p', { class: 'muted conn-hint', 'data-mode': ctx.cfg.connectionMode === 'cloudflare' ? 'cloudflare' : 'direct' }, ctx.cfg.connectionMode === 'cloudflare' ? 'Conexão: Cloudflare (muda em Configurações > Rede)' : 'Conexão: Direto (VPN) (muda em Configurações > Rede)'),
         createBtn,
       ),
       h('section', { class: 'block' }, h('h2', {}, 'Entrar com código'), h('div', { class: 'row' }, codeInput, joinBtn)),

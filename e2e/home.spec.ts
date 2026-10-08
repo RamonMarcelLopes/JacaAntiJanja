@@ -57,6 +57,7 @@ test('profile photo changes on screen immediately and can be removed', async () 
     const photo = a.page.locator('.avatar-holder img');
     await expect(photo).toHaveCount(0);
     await a.page.locator('input[type=file]').setInputFiles({ name: 'foto.png', mimeType: 'image/png', buffer: PNG_1X1 });
+    await a.page.getByRole('button', { name: 'Usar esta foto' }).click();
     await expect(photo).toBeVisible();
     await a.page.getByRole('button', { name: 'Remover' }).click();
     await expect(photo).toHaveCount(0);

@@ -64,7 +64,7 @@ test('leaving Settings with Cloudflare selected but not filled in goes back to D
     await a.page.getByPlaceholder('sua-conta').fill('ramon'); // only half of it, and not even saved
     await a.page.getByRole('button', { name: 'Voltar' }).click();
     await expect(a.page.locator('.toast', { hasText: 'Voltei para o modo Direto' })).toBeVisible();
-    await expect(a.page.getByText('Conexão: Direto')).toBeVisible();
+    await expect(a.page.locator('.conn-badge')).toHaveText('VPN');
     expect(readConfig(a).connectionMode ?? 'direct').toBe('direct');
 
     // coming back, the app shows Direto
@@ -81,7 +81,7 @@ test('a completed Cloudflare setup is kept: no warning when leaving, and the hom
     await configureWorker(a, 'ramon');
     await expect.poll(() => readConfig(a).connectionMode).toBe('cloudflare');
     await a.page.getByRole('button', { name: 'Voltar' }).click();
-    await expect(a.page.getByText('Conexão: Cloudflare')).toBeVisible();
+    await expect(a.page.locator('.conn-badge')).toHaveText('Cloudflare');
     await expect(a.page.locator('.toast', { hasText: 'Voltei para o modo Direto' })).toHaveCount(0);
   } finally {
     await a.close();
@@ -177,7 +177,7 @@ test('a room created through Cloudflare: short code with the account, guest only
 test('a config that says Cloudflare but has no Worker is treated as Direto', async () => {
   const a = await launchApp('cf-nokey', { name: 'Ana', connectionMode: 'cloudflare' }, env);
   try {
-    await expect(a.page.getByText('Conexão: Direto')).toBeVisible();
+    await expect(a.page.locator('.conn-badge')).toHaveText('VPN');
     await openRede(a);
     await expect(a.page.getByRole('radio', { name: 'Direto (VPN)' })).toHaveAttribute('aria-checked', 'true');
   } finally {

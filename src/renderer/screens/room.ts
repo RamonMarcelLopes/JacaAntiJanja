@@ -1,5 +1,6 @@
 import { AppConfig, BITRATE_MBPS, CaptureSource, Fps, Resolution, RoomInfo, ShareInfo, ShareMode } from '../../shared/protocol';
-import { avatarEl, dismiss, dismissOnBackdrop, h, resizeAvatar, toast } from '../dom';
+import { cropAvatar } from '../avatar-crop';
+import { avatarEl, dismiss, dismissOnBackdrop, h, toast } from '../dom';
 import { formatDuration } from '../../shared/time';
 import { speakerSvg } from '../icons';
 import { customSelect } from '../select';
@@ -129,7 +130,10 @@ export function renderRoom(ctx: RoomContext): { el: HTMLElement; dispose(): void
     h('div', { class: 'pb-center pb-hover' }, stopBtn),
     h('div', { class: 'pb-right pb-hover' }, volumeGroup, fsBtn),
   );
-  const player = h('div', { class: 'player' }, video, placeholder, playerBar);
+  // Your own whole-screen preview in fullscreen would capture itself: an endless tunnel of previews whose colors drift to green. The picture is
+  // replaced by this note while that is the case (a shared window, or someone else's screen, play normally).
+  const mirrorNote = h('div', { class: 'mirror-note' }, h('strong', {}, 'Você está ao vivo'), h('span', {}, 'A prévia da sua tela inteira fica oculta em tela cheia, senão ela captura a si mesma e a imagem fica verde.'));
+  const player = h('div', { class: 'player' }, video, placeholder, mirrorNote, playerBar);
 
   // In fullscreen the controls (and the cursor) hide after a moment without mouse movement and come back on movement.
   let idleTimer: number | undefined;
@@ -307,7 +311,8 @@ export function renderRoom(ctx: RoomContext): { el: HTMLElement; dispose(): void
       fileInput.value = '';
       if (!file) return;
       try {
-        await commit(session.me().name, await resizeAvatar(file));
+        const avatar = await cropAvatar(file);
+        if (avatar) await commit(session.me().name, avatar);
       } catch {
         toast('Não foi possível ler essa imagem.', 'error');
       }
@@ -555,6 +560,8 @@ export function renderRoom(ctx: RoomContext): { el: HTMLElement; dispose(): void
     playerBar.style.display = session.viewing ? 'grid' : 'none';
     const ownPreview = !!viewing && viewing.peerId === session.selfId && !!session.shareInfo;
     netInfo.style.display = ownPreview ? 'inline-flex' : 'none';
+    const sharingWholeScreen = (session.stream?.getVideoTracks()[0]?.getSettings() as MediaTrackSettings & { displaySurface?: string } | undefined)?.displaySurface === 'monitor';
+    player.classList.toggle('own-screen', ownPreview && sharingWholeScreen);
     volumeGroup.style.display = ownPreview ? 'none' : ''; // you never listen to your own screen
     if (ownPreview) {
       const info = session.shareInfo!;

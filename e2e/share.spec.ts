@@ -85,7 +85,7 @@ test('sharing a screen: the guest sees "AO VIVO", watches the video with audio, 
     await host.page.locator('.peer.live', { hasText: 'Ana' }).click();
     await expect(host.page.locator('.player-title')).toHaveText('Ana');
     await expect(host.page.locator('.volume')).toBeHidden(); // no volume control for your own screen
-    await expect(host.page.getByText('Prévia da sua tela')).toHaveCount(0);
+    await expect(host.page.getByText('Prévia da sua tela', { exact: true })).toHaveCount(0);
     await expect(host.page.locator('.netinfo-tip')).toBeHidden();
     await host.page.locator('.netinfo').hover();
     await expect(host.page.locator('.netinfo-tip')).toContainText('1 espectador');

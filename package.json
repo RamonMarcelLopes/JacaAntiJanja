@@ -1,7 +1,7 @@
 {
   "name": "jaca-anti-janja",
   "productName": "Jaca anti Janja",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "P2P screen sharing with system audio, no cloud backend",
   "main": "dist/main/main.js",
   "private": true,
