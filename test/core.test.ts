@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { WebSocket } from 'ws';
-import { decodeInvite, encodeCloudInvite, encodeInvite, isValidRoomId, parseInvite, roomIdFromBytes, workerHost } from '../src/shared/invite';
+import { decodeInvite, encodeCloudInvite, encodeInvite, isValidRoomId, parseInvite, roomIdFromBytes, workerHost, parseWorkerAddress } from '../src/shared/invite';
 import { formatDuration } from '../src/shared/time';
 import { buildStunRequest, classifyVpnInterfaces, isCgnatRange, isPrivateIpv4, natVerdict, parseStunMapped, parseStunResponse } from '../src/main/network';
 import { SignalingServer } from '../src/main/signaling';
@@ -352,4 +352,21 @@ test('a STUN response yields the public port as well as the address', () => {
   assert.deepEqual(parseStunMapped(msg, tx), { ip: '198.51.100.7', port: 40123 });
   assert.equal(parseStunResponse(msg, tx), '198.51.100.7');
   assert.equal(parseStunMapped(msg, Buffer.alloc(12, 4)), null);
+});
+
+test('Worker address: full address, host or only the account name; anything else is refused', () => {
+  assert.equal(parseWorkerAddress('ramon'), 'ramon');
+  assert.equal(parseWorkerAddress('  Ramon-1 '), 'ramon-1');
+  assert.equal(parseWorkerAddress('jaca-sala.ramon.workers.dev'), 'ramon');
+  assert.equal(parseWorkerAddress('https://jaca-sala.ramon.workers.dev/'), 'ramon');
+  assert.equal(parseWorkerAddress('https://jaca-sala.ramon.workers.dev/health?x=1'), 'ramon');
+  assert.equal(parseWorkerAddress('https://evil.example.com'), null);
+  assert.equal(parseWorkerAddress('jaca-sala.ramon.evil.com'), null);
+  assert.equal(parseWorkerAddress('ra mon'), null);
+  assert.equal(parseWorkerAddress(''), null);
+});
+
+test('the Worker copy of the shared files is in sync (run pnpm worker:sync after changing src/shared)', async () => {
+  const fs = await import('node:fs');
+  for (const f of ['invite.ts', 'protocol.ts']) assert.equal(fs.readFileSync(`worker/src/shared/${f}`, 'utf8'), fs.readFileSync(`src/shared/${f}`, 'utf8'), f);
 });

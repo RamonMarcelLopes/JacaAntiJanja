@@ -276,6 +276,7 @@ export function renderSettings(ctx: SettingsContext): { el: HTMLElement; dispose
   // Cloudflare: the Worker of the room owner (this PC), checked and saved with the owner key (kept encrypted by the main process)
   const subInput = h('input', { type: 'text', placeholder: 'sua-conta', spellcheck: false, autocomplete: 'off' });
   const keyInput = h('input', { type: 'password', placeholder: 'Cole a chave do dono', autocomplete: 'off' });
+  const deployBtn = h('button', { class: 'primary', onclick: () => void window.jaca.openWorkerDeploy() }, 'Publicar na minha conta Cloudflare');
   const cloudStatus = h('div', { class: 'test-result muted' });
   const say = (r: { ok: boolean; message: string }) => {
     cloudStatus.className = 'test-result ' + (r.ok ? 'ok' : 'bad');
@@ -338,13 +339,14 @@ export function renderSettings(ctx: SettingsContext): { el: HTMLElement; dispose
       h(
         'ol',
         { class: 'steps muted' },
-        h('li', {}, 'Crie uma conta grátis na Cloudflare.'),
-        h('li', {}, 'Publique o seu Worker de sala com um comando (passo a passo no ', h('a', { href: GUIDE_URL, target: '_blank', rel: 'noreferrer' }, 'guia'), ').'),
-        h('li', {}, 'Cole abaixo o nome da conta e a chave que o comando mostrar.'),
+        h('li', {}, 'Toque em "Publicar na minha conta Cloudflare". Abre a página da Cloudflare: entre (ou crie uma conta grátis) e confirme. Não mude o nome jaca-sala.'),
+        h('li', {}, 'Quando terminar, copie o endereço do Worker (jaca-sala.sua-conta.workers.dev) e cole abaixo.'),
+        h('li', {}, 'Toque em "Salvar e testar": o app cria a chave do dono sozinho. Prefere usar um comando? Veja o ', h('a', { href: GUIDE_URL, target: '_blank', rel: 'noreferrer' }, 'guia'), '.'),
       ),
     ),
-    field('Nome da conta (workers.dev)', subInput, 'É o trecho "sua-conta" de jaca-sala.sua-conta.workers.dev.'),
-    field('Chave do dono', keyInput, 'Fica guardada criptografada neste PC e nunca aparece na tela. Não é a chave da sua conta da Cloudflare.'),
+    deployBtn,
+    field('Endereço do Worker ou nome da conta', subInput, 'Pode colar o endereço inteiro (jaca-sala.sua-conta.workers.dev) ou só o trecho "sua-conta".'),
+    field('Chave do dono (opcional)', keyInput, 'Deixe vazio para o app criar a chave sozinho. Preencha só se você publicou pelo comando ou já tem uma chave. Fica guardada criptografada neste PC e nunca aparece na tela. Não é a chave da sua conta da Cloudflare.'),
     h('div', { class: 'row wrap' }, saveWorkerBtn, testWorkerBtn, clearWorkerBtn),
     cloudStatus,
   );

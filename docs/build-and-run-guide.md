@@ -156,6 +156,7 @@ Rooms can also connect through a Worker published in the room owner's own Cloudf
 - `pnpm worker:dev`: runs the Worker locally on http://127.0.0.1:8799 (no account needed).
 - `pnpm test:worker`: starts it and runs the protocol tests (`worker/test`) against the real Workers runtime.
 - `pnpm typecheck:worker` and `pnpm worker:build` (a dry-run bundle, nothing is published).
+- `pnpm worker:sync`: copies `src/shared/invite.ts` and `protocol.ts` into `worker/src/shared` (the Deploy button publishes `worker/` alone).
 - `pnpm worker:deploy`: publishes it to the logged-in Cloudflare account and prints the account name and the owner key to paste in the app.
 - `e2e/cloudflare.spec.ts` starts its own local Worker (port 8798) and points the app at it with `JACA_WORKER_URL`; `JACA_FAKE_VPNS`
   fakes the network adapters list. Both only work in development builds, never in the installed app.

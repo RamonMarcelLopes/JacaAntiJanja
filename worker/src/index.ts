@@ -6,19 +6,23 @@
 // Each room is one Durable Object, found by its 10-character id. It speaks the same protocol as the Node signaling server of the app
 // (src/main/signaling.ts), so the app uses the same client for both. Creating a room needs the OWNER_KEY secret of this Worker; joining
 // a room needs only its id (which is part of the invite code and not guessable: 50 random bits).
+//
+// Who is the owner: either the OWNER_KEY secret (set by `pnpm worker:deploy`), or, when that secret does not exist (the "Deploy to Cloudflare" button
+// cannot ask for one), the first key an app registers at /api/claim. Only a hash of it is stored, and once registered it can never be replaced.
 import { DurableObject } from 'cloudflare:workers';
-import { formatRoomId, isValidRoomId, WORKER_SCRIPT_NAME } from '../../src/shared/invite';
-import { CLIENT_TYPES, MAX_MESSAGE_BYTES, MAX_PEERS, MAX_ROOM_NAME, RELAY_TYPES } from '../../src/shared/protocol';
+import { formatRoomId, isValidRoomId, WORKER_SCRIPT_NAME } from './shared/invite';
+import { CLIENT_TYPES, MAX_MESSAGE_BYTES, MAX_PEERS, MAX_ROOM_NAME, RELAY_TYPES } from './shared/protocol';
 import type { ErrorCode, Message, PeerInfo, ShareInfo } from '../../src/shared/protocol';
 
 export interface Env {
   ROOMS: DurableObjectNamespace<Room>;
-  /** Secret set at publish time (wrangler secret put OWNER_KEY). Only the owner's app knows it. */
-  OWNER_KEY: string;
+  OWNER: DurableObjectNamespace<Owner>;
+  /** Optional secret set at publish time (wrangler secret put OWNER_KEY). Without it the owner is whoever claims the Worker first. */
+  OWNER_KEY?: string;
 }
 
 /** Constant-time comparison (both sides are hashed first, so the lengths do not leak either). An empty expected key never matches. */
-async function sameKey(given: string, expected: string): Promise<boolean> {
+async function sameKey(given: string, expected: string | undefined): Promise<boolean> {
   if (!expected) return false;
   const enc = new TextEncoder();
   const [a, b] = await Promise.all([crypto.subtle.digest('SHA-256', enc.encode(given)), crypto.subtle.digest('SHA-256', enc.encode(expected))]);
@@ -29,6 +33,18 @@ async function sameKey(given: string, expected: string): Promise<boolean> {
   return diff === 0;
 }
 
+const ownerStub = (env: Env) => env.OWNER.get(env.OWNER.idFromName('owner'));
+const MIN_KEY = 24;
+const MAX_KEY = 200;
+
+/** True when `key` is the owner's: the secret when there is one, otherwise the key registered by the first claim. */
+async function isOwner(env: Env, key: string): Promise<boolean> {
+  if (env.OWNER_KEY) return sameKey(key, env.OWNER_KEY);
+  if (key.length < MIN_KEY || key.length > MAX_KEY) return false;
+  const res = await ownerStub(env).fetch('https://owner/verify', { method: 'POST', body: JSON.stringify({ key }) });
+  return res.ok;
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -36,14 +52,26 @@ export default {
     if (url.pathname === '/health') return Response.json({ ok: true, service: WORKER_SCRIPT_NAME });
 
     if (url.pathname === '/api/check') {
-      return (await sameKey(url.searchParams.get('key') ?? '', env.OWNER_KEY)) ? Response.json({ ok: true }) : new Response('unauthorized', { status: 401 });
+      return (await isOwner(env, url.searchParams.get('key') ?? '')) ? Response.json({ ok: true }) : new Response('unauthorized', { status: 401 });
+    }
+
+    // The app of the person who published this Worker registers its own random key here, once. With an OWNER_KEY secret this is closed.
+    if (url.pathname === '/api/claim' && request.method === 'POST') {
+      if (env.OWNER_KEY) return new Response('already has an owner', { status: 403 });
+      const body = await request.text();
+      if (body.length > 1000) return new Response('bad request', { status: 400 });
+      return ownerStub(env).fetch('https://owner/claim', { method: 'POST', body });
+    }
+    if (url.pathname === '/api/status') {
+      if (env.OWNER_KEY) return Response.json({ service: WORKER_SCRIPT_NAME, claimed: true });
+      return ownerStub(env).fetch('https://owner/status');
     }
 
     const match = /^\/ws\/([0-9A-Z]+)$/.exec(url.pathname);
     if (match && isValidRoomId(match[1])) {
       if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return new Response('Expected a WebSocket', { status: 426 });
       const create = url.searchParams.get('create') === '1';
-      if (create && !(await sameKey(url.searchParams.get('key') ?? '', env.OWNER_KEY))) return new Response('unauthorized', { status: 401 });
+      if (create && !(await isOwner(env, url.searchParams.get('key') ?? ''))) return new Response('unauthorized', { status: 401 });
       const stub = env.ROOMS.get(env.ROOMS.idFromName(match[1]));
       const headers = new Headers(request.headers);
       headers.set('x-room-id', match[1]);
@@ -55,6 +83,38 @@ export default {
     return new Response('Jaca anti Janja room server', { headers: { 'content-type': 'text/plain; charset=utf-8' } });
   },
 };
+
+async function sha256Hex(text: string): Promise<string> {
+  const d = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)));
+  return [...d].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** Remembers who owns this Worker (only a hash of the key). A Durable Object handles one request at a time, so two claims can never both win. */
+export class Owner extends DurableObject<Env> {
+  async fetch(request: Request): Promise<Response> {
+    const path = new URL(request.url).pathname;
+    const stored = await this.ctx.storage.get<string>('keyHash');
+    if (path === '/status') return Response.json({ service: WORKER_SCRIPT_NAME, claimed: !!stored });
+    let key = '';
+    try {
+      const body = (await request.json()) as { key?: unknown };
+      key = typeof body.key === 'string' ? body.key : '';
+    } catch {
+      /* no key given */
+    }
+    if (key.length < MIN_KEY || key.length > MAX_KEY) return new Response('bad key', { status: 400 });
+    const hash = await sha256Hex(key);
+    if (path === '/claim') {
+      if (!stored) {
+        await this.ctx.storage.put('keyHash', hash);
+        return Response.json({ ok: true, claimed: true });
+      }
+      return (await sameKey(hash, stored)) ? Response.json({ ok: true, claimed: false }) : new Response('already has an owner', { status: 403 });
+    }
+    if (path === '/verify') return stored && (await sameKey(hash, stored)) ? Response.json({ ok: true }) : new Response('unauthorized', { status: 401 });
+    return new Response('not found', { status: 404 });
+  }
+}
 
 interface Meta {
   createdAt: number;

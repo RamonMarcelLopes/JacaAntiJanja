@@ -2,15 +2,20 @@ import { expect, test } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { launchApp, TestApp } from './app';
-import { OWNER_KEY, startWorker, WORKER_URL } from './worker';
+import { CLAIM_URL, OWNER_KEY, startWorker, WORKER_URL } from './worker';
 
 // These tests use a Worker started locally (no Cloudflare account): the app is pointed at it with JACA_WORKER_URL.
 let stopWorker: (() => void) | undefined;
+let stopClaimable: (() => void) | undefined;
 test.beforeAll(async () => {
-  test.setTimeout(150_000);
+  test.setTimeout(240_000);
   stopWorker = await startWorker();
+  stopClaimable = await startWorker(true);
 });
-test.afterAll(() => stopWorker?.());
+test.afterAll(() => {
+  stopWorker?.();
+  stopClaimable?.();
+});
 
 const env = { JACA_WORKER_URL: WORKER_URL };
 const readConfig = (a: TestApp) => JSON.parse(fs.readFileSync(path.join(a.dir, 'config.json'), 'utf8'));
@@ -252,5 +257,35 @@ test('"Testar minha rede" gives an answer', async () => {
     await expect(a.page.getByText(/Boa notícia: sua rede deve fechar conexão direta|Atenção: sua rede muda o endereço público|Não consegui concluir o teste/)).toBeVisible({ timeout: 20_000 });
   } finally {
     await a.close();
+  }
+});
+
+test('a Worker published with the button: pasting its address with no key makes the app create and register the owner key; a second PC is refused', async () => {
+  const claimEnv = { JACA_WORKER_URL: CLAIM_URL };
+  const a = await launchApp('claim-a', { name: 'Ramon' }, claimEnv);
+  const b = await launchApp('claim-b', { name: 'Outro' }, claimEnv);
+  try {
+    await openRede(a);
+    await a.page.getByRole('radio', { name: 'Cloudflare' }).click();
+    await a.page.getByPlaceholder('sua-conta').fill('https://jaca-sala.ramon.workers.dev/'); // the whole address is accepted
+    await a.page.getByRole('button', { name: 'Salvar e testar' }).click(); // key left empty
+    await expect(a.page.getByText('O app criou a chave do dono')).toBeVisible({ timeout: 20_000 });
+    await expect(a.page.getByPlaceholder('sua-conta')).toHaveValue('ramon'); // the field shows the account, not the pasted URL
+    const cfg = readConfig(a);
+    expect(cfg.workerSubdomain).toBe('ramon');
+    expect(cfg.workerOwnerKeyEnc).toBeTruthy();
+    expect(JSON.stringify(cfg)).not.toContain('"key"');
+    await expect.poll(() => readConfig(a).connectionMode).toBe('cloudflare');
+
+    // another PC pointing at the same Worker cannot take it over
+    await openRede(b);
+    await b.page.getByRole('radio', { name: 'Cloudflare' }).click();
+    await b.page.getByPlaceholder('sua-conta').fill('ramon');
+    await b.page.getByRole('button', { name: 'Salvar e testar' }).click();
+    await expect(b.page.getByText('Esse Worker já tem um dono')).toBeVisible({ timeout: 20_000 });
+    expect(readConfig(b).workerOwnerKeyEnc ?? '').toBe('');
+  } finally {
+    await a.close();
+    await b.close();
   }
 });

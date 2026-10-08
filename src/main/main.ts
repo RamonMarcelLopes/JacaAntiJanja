@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
-import { encodeCloudInvite, encodeInvite, isValidSubdomain, roomIdFromBytes, workerHost } from '../shared/invite';
+import { encodeCloudInvite, encodeInvite, isValidSubdomain, parseWorkerAddress, roomIdFromBytes, workerHost } from '../shared/invite';
 import { AppConfig, CaptureSource, ConnectivityResult, DEFAULT_PORT, MAX_ROOM_NAME, RoomInfo, SOUND_NAMES } from '../shared/protocol';
 import { startAudio, stopAudio } from './audio';
 import { checkForUpdates, currentUpdateState, initUpdater, installUpdate } from './updater';
@@ -112,6 +112,22 @@ async function checkWorker(httpBase: string, key: string): Promise<{ ok: boolean
     return { ok: false, message: `O endereço respondeu com erro ${res.status}. Confira o nome da conta e se o Worker foi publicado.` };
   } catch {
     return { ok: false, message: 'Não consegui alcançar o Worker. Confira o nome da conta, a internet e se o Worker foi publicado.' };
+  }
+}
+
+/** Opened by the "Publicar na minha conta Cloudflare" button: Cloudflare's own page that copies the Worker into the person's account. */
+const WORKER_DEPLOY_URL = 'https://deploy.workers.cloudflare.com/?url=https://github.com/RamonMarcelLopes/JacaAntiJanja/tree/main/worker';
+
+/** Registers a new random owner key on a Worker that has no owner yet (the first one to ask wins). */
+async function claimWorker(httpBase: string, key: string): Promise<{ ok: boolean; message: string }> {
+  try {
+    const res = await fetch(`${httpBase}/api/claim`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key }), signal: AbortSignal.timeout(8000) });
+    if (res.status === 403) return { ok: false, message: 'Esse Worker já tem um dono (outra chave). Se foi você que o conectou antes, cole a chave do dono; se não, publique o seu próprio Worker.' };
+    if (!res.ok) return { ok: false, message: `O endereço respondeu com erro ${res.status}. Confira se ele é mesmo o Worker jaca-sala publicado pelo botão.` };
+    const check = await checkWorker(httpBase, key); // an old Worker answers 200 to anything, so confirm that the key really works
+    return check.ok ? { ok: true, message: '' } : { ok: false, message: 'Esse endereço não parece ser o Worker do Jaca anti Janja (ou é uma versão antiga). Publique de novo pelo botão.' };
+  } catch {
+    return { ok: false, message: 'Não consegui alcançar o Worker. Confira o endereço, a internet e se a publicação na Cloudflare terminou.' };
   }
 }
 
@@ -240,16 +256,25 @@ function registerIpc(): void {
     return { configured: !!(cfg.workerSubdomain && cfg.workerOwnerKeyEnc), subdomain: cfg.workerSubdomain };
   });
   ipcMain.handle('worker:save', async (_e, subdomainRaw: unknown, keyRaw: unknown) => {
-    const subdomain = String(subdomainRaw ?? '').trim().toLowerCase();
-    const key = String(keyRaw ?? '').trim();
-    if (!isValidSubdomain(subdomain)) return { ok: false, message: 'O nome da conta só pode ter letras minúsculas, números e hífen (como aparece em seu-nome.workers.dev).' };
-    if (key.length < 16 || key.length > 200) return { ok: false, message: 'A chave do dono parece incompleta. Cole exatamente o que o comando de publicação mostrou.' };
+    const subdomain = parseWorkerAddress(String(subdomainRaw ?? ''));
+    let key = String(keyRaw ?? '').trim();
+    if (!subdomain) return { ok: false, message: 'O nome da conta só pode ter letras minúsculas, números e hífen (como aparece em seu-nome.workers.dev).' };
     if (!safeStorage.isEncryptionAvailable()) return { ok: false, message: 'O Windows não liberou a criptografia para guardar a chave com segurança.' };
+    if (!key) {
+      // no key pasted: the Worker was published with the button, so this app creates the owner key itself and registers it
+      key = randomBytes(24).toString('base64url');
+      const claimed = await claimWorker(workerBase(subdomain).http, key);
+      if (!claimed.ok) return claimed;
+      saveConfig({ workerSubdomain: subdomain, workerOwnerKeyEnc: safeStorage.encryptString(key).toString('base64') });
+      return { ok: true, message: 'Worker conectado. O app criou a chave do dono e a guardou criptografada neste PC.' };
+    }
+    if (key.length < 16 || key.length > 200) return { ok: false, message: 'A chave do dono parece incompleta. Cole exatamente o que o comando de publicação mostrou.' };
     const check = await checkWorker(workerBase(subdomain).http, key);
     if (!check.ok) return check;
     saveConfig({ workerSubdomain: subdomain, workerOwnerKeyEnc: safeStorage.encryptString(key).toString('base64') });
     return { ok: true, message: 'Worker conectado. A chave foi guardada criptografada neste PC.' };
   });
+  ipcMain.handle('worker:open-deploy', () => shell.openExternal(WORKER_DEPLOY_URL));
   ipcMain.handle('worker:test', async () => {
     const cfg = loadConfig();
     const key = readOwnerKey(cfg);

@@ -213,3 +213,9 @@ test('the plain-text ping is answered with pong, and garbage does not break the 
   const guest = await joinGuest(id, 'Bia'); // still works
   assert.ok(guest.msgs.some((m) => m.type === 'welcome'));
 });
+
+test('a Worker with an OWNER_KEY secret never accepts a claim', async () => {
+  const res = await fetch(`${HTTP}/api/claim`, { method: 'POST', body: JSON.stringify({ key: 'z'.repeat(32) }) });
+  assert.equal(res.status, 403);
+  assert.equal((await fetch(`${HTTP}/api/check?key=${KEY}`)).status, 200);
+});

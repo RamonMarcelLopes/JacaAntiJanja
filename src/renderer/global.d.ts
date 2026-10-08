@@ -13,6 +13,7 @@ declare global {
       workerStatus(): Promise<WorkerStatus>;
       saveWorker(subdomain: string, key: string): Promise<WorkerSaveResult>;
       testWorker(): Promise<WorkerSaveResult>;
+      openWorkerDeploy(): Promise<void>;
       clearWorker(): Promise<void>;
       workerWsBase(subdomain: string): Promise<string | null>;
       listSources(kind?: 'screens' | 'windows'): Promise<CaptureSource[]>;

@@ -19,6 +19,7 @@
     "worker:deploy": "node scripts/deploy-worker.mjs",
     "typecheck:worker": "tsc -p worker/tsconfig.json --noEmit",
     "test:worker": "node worker/test/run.mjs",
+    "worker:sync": "node scripts/sync-worker-shared.mjs",
     "worker:build": "wrangler deploy --dry-run --config worker/wrangler.toml --outdir .wrangler/dry"
   },
   "pnpm": {

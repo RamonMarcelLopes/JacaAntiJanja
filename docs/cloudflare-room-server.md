@@ -23,6 +23,19 @@ filled in (and saved with "Salvar e testar"); until then the app keeps using Dir
 
 ## Publish your Worker (once)
 
+### With the button (no command)
+
+1. In the app: Settings > Rede > **Cloudflare** > "Publicar na minha conta Cloudflare". Cloudflare's own page opens.
+2. Log in (or create the free account) and confirm. Cloudflare copies the `worker/` folder of this repository into your account and publishes it. Keep the name `jaca-sala`.
+3. When it finishes, copy the Worker address (`jaca-sala.your-account.workers.dev`), paste it in the app (the whole address or only `your-account`) and press "Salvar e testar", leaving the owner key empty.
+4. The app creates a random owner key, registers it on your Worker and stores it encrypted with Windows. It is never shown.
+
+How ownership works without a secret: **the first app that registers a key owns the Worker**. Only a hash of the key is stored on the Worker, and once registered it can never be replaced
+(a second key gets "Esse Worker já tem um dono"). Register right after publishing: until then, anyone who knew your address could register first, and the address is not published anywhere.
+If that ever happens, delete the Worker in the Cloudflare dashboard and publish it again.
+
+### With a command (also an option)
+
 1. Create a free account at cloudflare.com.
 2. In this repository, install and publish:
 
@@ -31,14 +44,14 @@ filled in (and saved with "Salvar e testar"); until then the app keeps using Dir
    pnpm worker:deploy
    ```
 
-   The command logs you in (a browser window opens), publishes the Worker `jaca-sala`, creates a random **owner key** and prints
+   The command logs you in (a browser window opens), publishes the Worker `jaca-sala`, creates a random **owner key** as a secret and prints
    two values: the **account name** (the part before `.workers.dev`) and the **owner key**.
 3. In the app: Settings > Rede > **Cloudflare**, paste both and press "Salvar e testar". The key is stored encrypted with Windows
    (never in plain text, never shown again).
 4. Create a room as usual. The code looks like `K7QM2-XRA9T@your-account`. Send it to your friends: they paste it and enter.
 
 Running `pnpm worker:deploy` again updates the Worker and creates a **new** owner key (the old one stops working); paste the new one
-in the app.
+in the app. A Worker that has the `OWNER_KEY` secret never accepts a first-use registration.
 
 ## The invite code
 
@@ -72,6 +85,7 @@ Settings > Rede > Cloudflare > "Remover" forgets the Worker in the app and goes 
 ## Troubleshooting
 
 - "A chave do dono não confere": paste the key printed by the last `pnpm worker:deploy`.
+- "Esse Worker já tem um dono": another app (or an earlier install of this one) already registered a key. Paste that key, or delete the Worker in the Cloudflare dashboard and publish it again.
 - "Não consegui alcançar o Worker": check the account name (letters, numbers and hyphens only), your internet, and that the deploy finished.
 - A friend gets "A sala não existe ou já foi encerrada": the room only exists while its owner is in it.
 
@@ -82,6 +96,8 @@ pnpm worker:dev      # runs it on http://127.0.0.1:8799 with a test owner key
 pnpm test:worker     # starts it and runs the protocol tests against it
 pnpm typecheck:worker
 ```
+
+`worker/src/shared` is a copy of `src/shared/invite.ts` and `protocol.ts` (the button publishes `worker/` alone). After changing those two files run `pnpm worker:sync`; `pnpm test` fails when the copies differ.
 
 No Cloudflare account is needed for these. In a development build, set `JACA_WORKER_URL=http://127.0.0.1:8799` to make the app talk to that
 local Worker instead of `workers.dev`.
