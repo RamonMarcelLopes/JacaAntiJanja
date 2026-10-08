@@ -51,7 +51,7 @@ test('the connection mode defaults to Direto; Cloudflare shows its own fields an
     await expect(a.page.getByPlaceholder('sua-conta')).toBeVisible();
     await expect(a.page.getByText('Porta do servidor')).toBeHidden(); // the direct-mode fields get out of the way
     await expect(a.page.getByRole('button', { name: 'Testar minha rede' })).toBeVisible();
-    await expect(a.page.getByText('Preencha o nome da conta e a chave do dono')).toBeVisible();
+    await expect(a.page.getByText('Cole o endereço do seu Worker')).toBeVisible();
     expect(readConfig(a).connectionMode ?? 'direct').toBe('direct'); // not saved: it is not set up yet
 
     await a.page.getByRole('radio', { name: 'Direto (VPN)' }).click();

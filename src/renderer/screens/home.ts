@@ -2,6 +2,7 @@ import { encodeCloudInvite, encodeInvite, parseInvite } from '../../shared/invit
 import { AppConfig, RoomInfo } from '../../shared/protocol';
 import { cropAvatar } from '../avatar-crop';
 import { avatarEl, h, toast } from '../dom';
+import { diagnoseCloud } from '../cloud-diagnose';
 import { JOIN_ERROR_TEXT, JoinError, UNREACHABLE_CLOUD_TEXT } from '../signaling-client';
 import { Session } from '../session';
 
@@ -117,15 +118,14 @@ export function renderHome(ctx: HomeContext): HTMLElement {
       }
       ctx.openRoom(session, null);
     } catch (e: any) {
-      const cloud = invite.kind === 'cloud';
-      toast(
-        e instanceof JoinError
-          ? e.code === 'UNREACHABLE' && cloud
-            ? UNREACHABLE_CLOUD_TEXT
-            : (JOIN_ERROR_TEXT[e.code] ?? e.message)
-          : String(e?.message ?? 'Falha ao entrar na sala.'),
-        'error',
-      );
+      let text = e instanceof JoinError ? (JOIN_ERROR_TEXT[e.code] ?? e.message) : String(e?.message ?? 'Falha ao entrar na sala.');
+      if (e instanceof JoinError && (e.code === 'UNREACHABLE' || e.code === 'TIMEOUT') && invite.kind === 'cloud') {
+        // find out whether this PC's network is the problem, instead of just saying it failed
+        joinBtn.textContent = 'Verificando...';
+        const base = await window.jaca.workerWsBase(invite.subdomain);
+        text = base ? await diagnoseCloud(base, invite.subdomain) : UNREACHABLE_CLOUD_TEXT;
+      }
+      toast(text, 'error');
       joinBtn.disabled = false;
       joinBtn.textContent = 'Entrar';
     }

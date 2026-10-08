@@ -25,10 +25,12 @@ filled in (and saved with "Salvar e testar"); until then the app keeps using Dir
 
 ### With the button (no command)
 
-1. In the app: Settings > Rede > **Cloudflare** > "Publicar na minha conta Cloudflare". Cloudflare's own page opens.
-2. Log in (or create the free account) and confirm. Cloudflare copies the `worker/` folder of this repository into your account and publishes it. Keep the name `jaca-sala`.
-3. When it finishes, copy the Worker address (`jaca-sala.your-account.workers.dev`), paste it in the app (the whole address or only `your-account`) and press "Salvar e testar", leaving the owner key empty.
-4. The app creates a random owner key, registers it on your Worker and stores it encrypted with Windows. It is never shown.
+1. In the app: Settings > Rede > **Cloudflare** > "Publicar na minha conta Cloudflare". Cloudflare's own page opens in the browser.
+2. Log in (or create the free account). Cloudflare asks to connect **GitHub**: allow it, then pick the Git account where the copy will live. If the page closes after connecting, open the button again.
+3. Choose to create it directly. Cloudflare creates a repository called `jaca-sala` in your GitHub (public by default; you can make it private later in the repository's Settings > Danger Zone, it holds only a copy of the code, no secrets), then opens the **Implantações** (deployments) view and builds and publishes it. It takes under a minute and ends with "Success".
+4. The log ends with the Worker address, `https://jaca-sala.your-account.workers.dev`. Copy it. In the Cloudflare dashboard (Workers e Pages > jaca-sala > Configurações > Domínios e rotas) the **workers.dev** route must say "Habilitado": the room address does not exist without it. If it says "Desabilitado", enable it.
+5. In the app, paste the address (the whole address or only `your-account`) and press "Salvar e testar", leaving the owner key **empty**.
+6. The app creates a random owner key, registers it on your Worker and stores it encrypted with Windows. It is never shown.
 
 How ownership works without a secret: **the first app that registers a key owns the Worker**. Only a hash of the key is stored on the Worker, and once registered it can never be replaced
 (a second key gets "Esse Worker já tem um dono"). Register right after publishing: until then, anyone who knew your address could register first, and the address is not published anywhere.
@@ -85,6 +87,7 @@ Settings > Rede > Cloudflare > "Remover" forgets the Worker in the app and goes 
 ## Troubleshooting
 
 - "A chave do dono não confere": paste the key printed by the last `pnpm worker:deploy`.
+- "Não consegui alcançar o servidor da sala" / the app explains the cause itself after a failed join: the room is closed, the connection of the room (WebSocket) is blocked by an antivirus web protection, firewall or network, or workers.dev is unreachable (try another network such as a phone hotspot, or set the Windows DNS to 1.1.1.1).
 - "Esse Worker já tem um dono": another app (or an earlier install of this one) already registered a key. Paste that key, or delete the Worker in the Cloudflare dashboard and publish it again.
 - "Não consegui alcançar o Worker": check the account name (letters, numbers and hyphens only), your internet, and that the deploy finished.
 - A friend gets "A sala não existe ou já foi encerrada": the room only exists while its owner is in it.

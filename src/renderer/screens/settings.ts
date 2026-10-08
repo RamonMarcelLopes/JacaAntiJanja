@@ -374,7 +374,7 @@ export function renderSettings(ctx: SettingsContext): { el: HTMLElement; dispose
           else {
             // not saved as the mode yet: it needs the account name and the owner key
             cloudStatus.className = 'test-result bad';
-            cloudStatus.textContent = 'Preencha o nome da conta e a chave do dono e toque em "Salvar e testar". Se sair sem fazer isso, o app volta para o modo Direto (VPN).';
+            cloudStatus.textContent = 'Cole o endereço do seu Worker e toque em "Salvar e testar" (a chave do dono o app cria sozinho; deixe o campo dela vazio). Se sair sem fazer isso, o app volta para o modo Direto (VPN).';
           }
         },
       },
@@ -496,7 +496,7 @@ export function renderSettings(ctx: SettingsContext): { el: HTMLElement; dispose
       // leaving with Cloudflare selected but not set up: it was never saved as the mode, so the app stays on Direto; say so
       if (mode === 'cloudflare' && !workerConfigured) {
         void ctx.update({ connectionMode: 'direct' });
-        toast('O modo Cloudflare precisa do nome da conta e da chave do dono, e isso não foi preenchido. Voltei para o modo Direto (VPN).');
+        toast('O modo Cloudflare precisa do seu Worker conectado, e isso não foi feito. Voltei para o modo Direto (VPN).');
       }
     },
   };

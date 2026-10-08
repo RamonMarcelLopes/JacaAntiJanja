@@ -4,6 +4,11 @@ name = "jaca-sala"
 main = "src/index.ts"
 compatibility_date = "2025-09-01"
 
+# The room address is https://jaca-sala.<account>.workers.dev, so the workers.dev route must be ON (stated here instead of relying on the default,
+# which the dashboard once showed as "Desabilitado"). Preview URLs are not needed.
+workers_dev = true
+preview_urls = false
+
 [[durable_objects.bindings]]
 name = "ROOMS"
 class_name = "Room"

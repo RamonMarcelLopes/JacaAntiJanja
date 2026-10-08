@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, desktopCapturer, ipcMain, safeStorage, session, shell } from 'electron';
+import { app, BrowserWindow, clipboard, desktopCapturer, ipcMain, net as electronNet, safeStorage, session, shell } from 'electron';
 import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import net from 'node:net';
@@ -273,6 +273,16 @@ function registerIpc(): void {
     if (!check.ok) return check;
     saveConfig({ workerSubdomain: subdomain, workerOwnerKeyEnc: safeStorage.encryptString(key).toString('base64') });
     return { ok: true, message: 'Worker conectado. A chave foi guardada criptografada neste PC.' };
+  });
+  // plain HTTPS check of a Worker address (used to explain why a room could not be reached); only valid subdomains, only the health page
+  ipcMain.handle('worker:reach', async (_e, subdomain: unknown) => {
+    if (typeof subdomain !== 'string' || !isValidSubdomain(subdomain)) return false;
+    try {
+      const res = await electronNet.fetch(`${workerBase(subdomain).http}/health`, { signal: AbortSignal.timeout(6000) });
+      return res.ok;
+    } catch {
+      return false;
+    }
   });
   ipcMain.handle('worker:open-deploy', () => shell.openExternal(WORKER_DEPLOY_URL));
   ipcMain.handle('worker:test', async () => {
