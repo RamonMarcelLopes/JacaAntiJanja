@@ -87,6 +87,11 @@ test('sharing a screen: the guest sees "AO VIVO", watches the video with audio, 
     await expect(host.page.locator('.volume')).toBeHidden(); // no volume control for your own screen
     await expect(host.page.getByText('Prévia da sua tela', { exact: true })).toHaveCount(0);
     await expect(host.page.locator('.netinfo-tip')).toBeHidden();
+    // the name and the signal icon (bottom left) only show while the pointer is over the picture, like the stop button and the volume
+    await host.page.mouse.move(2, 2);
+    await expect(host.page.locator('.pb-left')).toHaveCSS('opacity', '0');
+    await host.page.locator('.player').hover();
+    await expect(host.page.locator('.pb-left')).toHaveCSS('opacity', '1');
     await host.page.locator('.netinfo').hover();
     await expect(host.page.locator('.netinfo-tip')).toContainText('1 espectador');
     await expect(host.page.locator('.netinfo-tip')).toContainText('Mbps');

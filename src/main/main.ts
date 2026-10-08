@@ -1,11 +1,14 @@
 import { app, BrowserWindow, clipboard, desktopCapturer, ipcMain, net as electronNet, safeStorage, session, shell } from 'electron';
 import { randomBytes } from 'node:crypto';
+import dns from 'node:dns';
 import fs from 'node:fs';
 import net from 'node:net';
+import os from 'node:os';
 import path from 'node:path';
 import { encodeCloudInvite, encodeInvite, isValidSubdomain, parseWorkerAddress, roomIdFromBytes, workerHost } from '../shared/invite';
 import { AppConfig, CaptureSource, ConnectivityResult, DEFAULT_PORT, MAX_ROOM_NAME, RoomInfo, SOUND_NAMES } from '../shared/protocol';
 import { startAudio, stopAudio } from './audio';
+import { deleteWorkerBackup, loadWorkerBackup, saveWorkerBackup, updateWorkerBackupMode } from './worker-backup';
 import { checkForUpdates, currentUpdateState, initUpdater, installUpdate } from './updater';
 import { detectVpnAddresses, discoverPublicIp, ensureFirewallRule, isPrivateIpv4, localIpv4Addresses, mapPortUpnp, natMappingTest, PortMapping, tcpProbe } from './network';
 import { SignalingServer } from './signaling';
@@ -36,6 +39,45 @@ let mapping: PortMapping | null = null;
 let selectedSourceId: string | null = null;
 
 const configPath = () => path.join(app.getPath('userData'), 'config.json');
+const logPath = () => path.join(app.getPath('userData'), 'jaca.log');
+
+/**
+ * Appends one line to the log file (jaca.log in the app folder; the previous one is kept as jaca.old.log once it passes 512 KB).
+ * It never holds owner keys, room tokens or full invite codes: the person may send this file to get help.
+ */
+function logEvent(kind: string, text: string): void {
+  try {
+    const file = logPath();
+    try {
+      if (fs.statSync(file).size > 512 * 1024) fs.renameSync(file, path.join(path.dirname(file), 'jaca.old.log'));
+    } catch {
+      /* no log yet */
+    }
+    const oneLine = text.split(/[\r\n]+/).join(' | ').slice(0, 2500);
+    fs.appendFileSync(file, `${new Date().toISOString()} v${app.getVersion()} [${kind}] ${oneLine}${os.EOL}`);
+  } catch {
+    /* logging must never break the app */
+  }
+}
+
+/** What this PC looks like to the app (no addresses of the PC itself): system, resolver settings, proxy and network adapters. */
+async function environmentSnapshot(sampleUrl: string): Promise<string> {
+  const parts: string[] = [`windows ${os.release()} ${os.arch()}`, `electron ${process.versions.electron} chromium ${process.versions.chrome}`, `idioma ${app.getLocale()}`];
+  try {
+    parts.push(`dns-servidores [${dns.getServers().join(', ')}]`);
+  } catch {
+    /* not available */
+  }
+  try {
+    parts.push(`proxy "${await session.defaultSession.resolveProxy(sampleUrl)}"`);
+  } catch {
+    /* not available */
+  }
+  const nics = Object.entries(os.networkInterfaces()).map(([name, list]) => `${name}(${(list ?? []).some((a) => a.family === 'IPv4') ? 'v4' : ''}${(list ?? []).some((a) => a.family === 'IPv6') ? 'v6' : ''})`);
+  parts.push(`placas [${nics.join(', ')}]`);
+  parts.push(`dns-cloudflare-forcado ${dohForced ? 'sim' : 'nao'}`);
+  return parts.join('; ');
+}
 
 function loadConfig(): AppConfig {
   try {
@@ -87,6 +129,67 @@ function publicConfig(cfg: AppConfig): AppConfig {
   return { ...cfg, workerOwnerKeyEnc: cfg.workerOwnerKeyEnc ? 'set' : '' };
 }
 
+/** Keeps the copy of the Cloudflare connection that survives uninstalling (see worker-backup.ts). Failing to write it never blocks connecting. */
+async function keepWorkerBackup(subdomain: string, key: string): Promise<void> {
+  try {
+    await saveWorkerBackup({ subdomain, key, mode: loadConfig().connectionMode });
+  } catch (e: any) {
+    logEvent('erro', `não consegui guardar a cópia da conexão Cloudflare: ${e?.message ?? e}`);
+  }
+}
+
+/** A fresh install (or wiped app data) with a saved copy: the Worker comes back by itself, so nobody has to recreate the owner key. */
+async function restoreWorkerBackup(): Promise<void> {
+  try {
+    const cfg = loadConfig();
+    if (cfg.workerSubdomain && cfg.workerOwnerKeyEnc) return;
+    if (!safeStorage.isEncryptionAvailable()) return;
+    const backup = await loadWorkerBackup();
+    if (!backup || !isValidSubdomain(backup.subdomain)) return;
+    saveConfig({ workerSubdomain: backup.subdomain, workerOwnerKeyEnc: safeStorage.encryptString(backup.key).toString('base64'), connectionMode: backup.mode });
+    logEvent('info', `conexão com o Worker restaurada da cópia guardada (conta ${backup.subdomain}, modo ${backup.mode})`);
+  } catch (e: any) {
+    logEvent('erro', `não consegui restaurar a cópia da conexão Cloudflare: ${e?.message ?? e}`);
+  }
+}
+
+let dohForced = false;
+
+/**
+ * Some PCs cannot resolve workers.dev inside the app (net::ERR_NAME_NOT_RESOLVED) although the browser can: seen with Radmin VPN, whose virtual
+ * adapter lists DNS servers that never answer (fec0:0:0:ffff::1...). When resolving the Worker's name fails, the app asks Cloudflare's DNS over
+ * HTTPS instead, reaching it by number (so no DNS is needed to find it), for the rest of the session. PCs where resolving works are left alone.
+ */
+async function ensureNameResolution(httpBase: string): Promise<void> {
+  if (dohForced) return;
+  let host = '';
+  try {
+    host = new URL(httpBase).hostname;
+  } catch {
+    return;
+  }
+  if (/^[d.]+$/.test(host) || host === 'localhost') return; // an address, nothing to resolve
+  try {
+    if (!app.isPackaged && process.env.JACA_FAKE_DNS_FAIL) throw new Error('fake DNS failure (tests only)');
+    await Promise.race([session.defaultSession.resolveHost(host), new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 4000))]);
+  } catch {
+    // only switch when Cloudflare's DNS knows the name that this PC could not find (a mistyped account name is unknown to both, and changes nothing)
+    try {
+      const r = await electronNet.fetch(`https://1.1.1.1/dns-query?name=${encodeURIComponent(host)}&type=A`, { headers: { accept: 'application/dns-json' }, signal: AbortSignal.timeout(5000) });
+      const answer = ((await r.json()) as { Answer?: Array<{ type: number }> }).Answer;
+      if (!answer?.some((a) => a.type === 1)) return;
+    } catch {
+      return; // Cloudflare's DNS cannot be reached either: nothing better to switch to
+    }
+    app.configureHostResolver({
+      enableBuiltInResolver: true,
+      secureDnsMode: 'secure',
+      secureDnsServers: ['https://1.1.1.1/dns-query', 'https://1.0.0.1/dns-query', 'https://8.8.8.8/dns-query'],
+    });
+    dohForced = true;
+  }
+}
+
 /** Address of the room server. The real one is derived from the owner's subdomain; development and tests can point it at a local Worker. */
 function workerBase(subdomain: string): { http: string; ws: string } {
   const local = !app.isPackaged ? process.env.JACA_WORKER_URL : undefined; // e.g. http://127.0.0.1:8799
@@ -105,6 +208,7 @@ function readOwnerKey(cfg: AppConfig): string | null {
 }
 
 async function checkWorker(httpBase: string, key: string): Promise<{ ok: boolean; message: string }> {
+  await ensureNameResolution(httpBase);
   try {
     const res = await fetch(`${httpBase}/api/check?key=${encodeURIComponent(key)}`, { signal: AbortSignal.timeout(8000) });
     if (res.ok) return { ok: true, message: 'Worker encontrado e chave correta.' };
@@ -120,9 +224,10 @@ const WORKER_DEPLOY_URL = 'https://deploy.workers.cloudflare.com/?url=https://gi
 
 /** Registers a new random owner key on a Worker that has no owner yet (the first one to ask wins). */
 async function claimWorker(httpBase: string, key: string): Promise<{ ok: boolean; message: string }> {
+  await ensureNameResolution(httpBase);
   try {
     const res = await fetch(`${httpBase}/api/claim`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key }), signal: AbortSignal.timeout(8000) });
-    if (res.status === 403) return { ok: false, message: 'Esse Worker já tem um dono (outra chave). Se foi você que o conectou antes, cole a chave do dono; se não, publique o seu próprio Worker.' };
+    if (res.status === 403) return { ok: false, message: 'Esse Worker já tem um dono (outra chave). Se foi você que o conectou antes e perdeu a chave, o guia "Recuperar o acesso" (docs/cloudflare-recuperar-acesso.md, no GitHub do app; in English: cloudflare-recover-access.md) explica como definir uma chave nova em poucos passos. Se não foi você, publique o seu próprio Worker.' };
     if (!res.ok) return { ok: false, message: `O endereço respondeu com erro ${res.status}. Confira se ele é mesmo o Worker jaca-sala publicado pelo botão.` };
     const check = await checkWorker(httpBase, key); // an old Worker answers 200 to anything, so confirm that the key really works
     return check.ok ? { ok: true, message: '' } : { ok: false, message: 'Esse endereço não parece ser o Worker do Jaca anti Janja (ou é uma versão antiga). Publique de novo pelo botão.' };
@@ -249,7 +354,9 @@ function registerIpc(): void {
   // the Worker address and owner key can only change through worker:save / worker:clear (which check them first)
   ipcMain.handle('config:set', (_e, patch: Partial<AppConfig>) => {
     const { workerSubdomain: _s, workerOwnerKeyEnc: _k, ...allowed } = patch ?? {};
-    return publicConfig(saveConfig(allowed));
+    const saved = saveConfig(allowed);
+    if (allowed.connectionMode) updateWorkerBackupMode(saved.connectionMode); // the saved copy remembers which mode was in use
+    return publicConfig(saved);
   });
   ipcMain.handle('worker:status', () => {
     const cfg = loadConfig();
@@ -266,25 +373,69 @@ function registerIpc(): void {
       const claimed = await claimWorker(workerBase(subdomain).http, key);
       if (!claimed.ok) return claimed;
       saveConfig({ workerSubdomain: subdomain, workerOwnerKeyEnc: safeStorage.encryptString(key).toString('base64') });
-      return { ok: true, message: 'Worker conectado. O app criou a chave do dono e a guardou criptografada neste PC.' };
+      await keepWorkerBackup(subdomain, key);
+      return { ok: true, message: 'Worker conectado. O app criou a chave do dono e a guardou criptografada neste PC (e numa cópia que sobrevive a desinstalar o app).' };
     }
     if (key.length < 16 || key.length > 200) return { ok: false, message: 'A chave do dono parece incompleta. Cole exatamente o que o comando de publicação mostrou.' };
     const check = await checkWorker(workerBase(subdomain).http, key);
     if (!check.ok) return check;
     saveConfig({ workerSubdomain: subdomain, workerOwnerKeyEnc: safeStorage.encryptString(key).toString('base64') });
-    return { ok: true, message: 'Worker conectado. A chave foi guardada criptografada neste PC.' };
+    await keepWorkerBackup(subdomain, key);
+    return { ok: true, message: 'Worker conectado. A chave foi guardada criptografada neste PC (e numa cópia que sobrevive a desinstalar o app).' };
   });
   // plain HTTPS check of a Worker address (used to explain why a room could not be reached); only valid subdomains, only the health page
-  ipcMain.handle('worker:reach', async (_e, subdomain: unknown): Promise<{ ok: boolean; detail: string }> => {
-    if (typeof subdomain !== 'string' || !isValidSubdomain(subdomain)) return { ok: false, detail: 'endereço inválido' };
+  ipcMain.handle('worker:reach', async (_e, subdomain: unknown): Promise<{ ok: boolean; detail: string; nameUnknown: boolean }> => {
+    if (typeof subdomain !== 'string' || !isValidSubdomain(subdomain)) return { ok: false, detail: 'endereço inválido', nameUnknown: false };
+    const base = workerBase(subdomain).http;
+    let host = '';
     try {
-      const res = await electronNet.fetch(`${workerBase(subdomain).http}/health`, { signal: AbortSignal.timeout(8000) });
-      return { ok: res.ok, detail: res.ok ? '' : `resposta HTTP ${res.status}` };
-    } catch (e: any) {
-      // Chromium's error name (net::ERR_NAME_NOT_RESOLVED, net::ERR_CERT_..., net::ERR_PROXY_..., net::ERR_CONNECTION_...) says what is in the way
-      const text = String(e?.cause?.message ?? e?.message ?? e);
-      return { ok: false, detail: /net::ERR_[A-Z_]+/.exec(text)?.[0] ?? (e?.name === 'TimeoutError' ? 'tempo esgotado' : text.slice(0, 120)) };
+      host = new URL(base).hostname;
+    } catch {
+      /* not a URL */
     }
+    // A short report of what each part of this PC can do, shown in the error so a screenshot is enough to find the cause. It runs BEFORE the
+    // app switches to Cloudflare's DNS, so it shows the PC as it really is.
+    const parts: string[] = [];
+    let nameUnknown = false; // Cloudflare's DNS does not know this address at all: the account name in the code is wrong or was cut
+    const short =(e: any) => String(e?.code ?? /net::ERR_[A-Z_]+/.exec(String(e?.cause?.message ?? e?.message ?? e))?.[0] ?? e?.message ?? e).slice(0, 60);
+    const step = async (name: string, fn: () => Promise<string>): Promise<void> => {
+      try {
+        const r = await Promise.race([fn(), new Promise<string>((_, reject) => setTimeout(() => reject(new Error('tempo esgotado')), 5000))]);
+        parts.push(`${name}=ok${r ? ' ' + r : ''}`);
+      } catch (e) {
+        parts.push(`${name}=${short(e)}`);
+      }
+    };
+    if (host) {
+      await step('dns-windows', async () => `${(await dns.promises.lookup(host, { all: true })).length} ip`);
+      await step('dns-app', async () => `${(await session.defaultSession.resolveHost(host)).endpoints.length} ip`);
+      await step('doh-1.1.1.1', async () => {
+        const r = await electronNet.fetch(`https://1.1.1.1/dns-query?name=${host}&type=A`, { headers: { accept: 'application/dns-json' }, signal: AbortSignal.timeout(5000) });
+        if (!r.ok) throw new Error(`http ${r.status}`);
+        const answer = ((await r.json()) as { Answer?: Array<{ type: number }> }).Answer;
+        nameUnknown = !answer?.some((a) => a.type === 1);
+        return nameUnknown ? 'nome desconhecido' : 'nome existe';
+      });
+    }
+    await ensureNameResolution(base);
+    let ok = false;
+    await step('https', async () => {
+      const res = await electronNet.fetch(`${base}/health`, { signal: AbortSignal.timeout(8000) });
+      ok = res.ok;
+      if (!res.ok) throw new Error(`http ${res.status}`);
+      return '';
+    });
+    if (dohForced) parts.push('DNS da Cloudflare em uso');
+    logEvent('rede', `${host || subdomain}: ${ok ? 'alcançável' : 'inalcançável'}; ${parts.join('; ')}; ${await environmentSnapshot(base)}`);
+    return { ok, detail: parts.join('; '), nameUnknown };
+  });
+  // the renderer reports what went wrong (join and room creation errors); only short text, only a few kinds
+  ipcMain.handle('log:write', (_e, kind: unknown, text: unknown) => {
+    if (typeof kind === 'string' && ['entrar', 'criar', 'rede', 'erro'].includes(kind) && typeof text === 'string') logEvent(kind, text);
+  });
+  ipcMain.handle('log:open', () => {
+    if (!fs.existsSync(logPath())) logEvent('info', 'registro aberto pelo usuário');
+    shell.showItemInFolder(logPath());
   });
   ipcMain.handle('worker:open-deploy', () => shell.openExternal(WORKER_DEPLOY_URL));
   ipcMain.handle('worker:test', async () => {
@@ -295,8 +446,14 @@ function registerIpc(): void {
   });
   ipcMain.handle('worker:clear', () => {
     saveConfig({ workerSubdomain: '', workerOwnerKeyEnc: '', connectionMode: 'direct' });
+    deleteWorkerBackup(); // "Remover" means forget it for good, including the copy that survives uninstalling
   });
-  ipcMain.handle('worker:ws-base', (_e, subdomain: unknown) => (typeof subdomain === 'string' && isValidSubdomain(subdomain) ? workerBase(subdomain).ws : null));
+  ipcMain.handle('worker:ws-base', async (_e, subdomain: unknown) => {
+    if (typeof subdomain !== 'string' || !isValidSubdomain(subdomain)) return null;
+    const base = workerBase(subdomain);
+    await ensureNameResolution(base.http); // called right before joining a Cloudflare room
+    return base.ws;
+  });
   ipcMain.handle('net:detect-vpns', () => {
     const fake = !app.isPackaged ? process.env.JACA_FAKE_VPNS : undefined; // tests only
     if (fake) {
@@ -435,10 +592,14 @@ if (!gotLock) {
       win.focus();
     }
   });
-  app.whenReady().then(() => {
-    // Some PCs cannot resolve workers.dev through the Windows DNS (net::ERR_NAME_NOT_RESOLVED) although the browser can, because the browser has its own
-    // secure DNS. The app does the same: it asks Cloudflare's DNS over HTTPS first and falls back to the system DNS when that is not possible.
-    app.configureHostResolver({ enableBuiltInResolver: true, secureDnsMode: 'automatic', secureDnsServers: ['https://cloudflare-dns.com/dns-query'] });
+  // anything that crashes or is thrown and never caught ends up in the log too, so a bug report does not depend on remembering what happened
+  process.on('uncaughtException', (e) => logEvent('erro', `exceção não tratada: ${e?.stack ?? e}`));
+  process.on('unhandledRejection', (e: any) => logEvent('erro', `promessa rejeitada: ${e?.stack ?? e}`));
+  app.on('render-process-gone', (_e, _wc, details) => logEvent('erro', `janela encerrada: ${details.reason} (código ${details.exitCode})`));
+  app.on('child-process-gone', (_e, details) => logEvent('erro', `processo ${details.type} encerrado: ${details.reason} (código ${details.exitCode})`));
+  app.whenReady().then(async () => {
+    logEvent('info', `app aberto (${app.isPackaged ? 'instalado' : 'desenvolvimento'}) em windows ${os.release()} ${os.arch()}, idioma ${app.getLocale()}`);
+    await restoreWorkerBackup(); // before the window asks for the config
     registerIpc();
     setupSession();
     createWindow();

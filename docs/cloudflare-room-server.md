@@ -88,7 +88,8 @@ Settings > Rede > Cloudflare > "Remover" forgets the Worker in the app and goes 
 
 - "A chave do dono não confere": paste the key printed by the last `pnpm worker:deploy`.
 - "Não consegui alcançar o servidor da sala" / the app explains the cause itself after a failed join: the room is closed, the connection of the room (WebSocket) is blocked by an antivirus web protection, firewall or network, or workers.dev is unreachable (try another network such as a phone hotspot, or set the Windows DNS to 1.1.1.1).
-- "Esse Worker já tem um dono": another app (or an earlier install of this one) already registered a key. Paste that key, or delete the Worker in the Cloudflare dashboard and publish it again.
+- "Esse Worker já tem um dono": another app (or an earlier install of this one) already registered a key. Paste that key, or define a new one as the `OWNER_KEY` secret in the Cloudflare dashboard. Step by step, with the other lost-access cases, in [cloudflare-recover-access.md](cloudflare-recover-access.md) (English) and [cloudflare-recuperar-acesso.md](cloudflare-recuperar-acesso.md) (Portuguese).
+- The connection to your Worker (account + key) is also kept in `%LOCALAPPDATA%\JacaAntiJanja-Backup`, outside the app's data folder, with the key protected by Windows (DPAPI, this Windows user). Uninstalling and installing again restores it by itself; "Remover" in Settings deletes it.
 - "Não consegui alcançar o Worker": check the account name (letters, numbers and hyphens only), your internet, and that the deploy finished.
 - A friend gets "A sala não existe ou já foi encerrada": the room only exists while its owner is in it.
 

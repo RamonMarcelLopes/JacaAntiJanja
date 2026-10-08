@@ -48,7 +48,8 @@ export function renderHome(ctx: HomeContext): HTMLElement {
   };
   drawAvatar();
 
-  const codeInput = h('input', { type: 'text', placeholder: 'XXXX-XXXX-XXXX-XXXX', maxLength: 24, class: 'code-input', spellcheck: false });
+  // the longest code is a Cloudflare one: 11 characters + "@" + an account name of up to 63 (the first versions allowed only 24, which cut the end of the account name)
+  const codeInput = h('input', { type: 'text', placeholder: 'XXXX-XXXX-XXXX-XXXX', maxLength: 80, class: 'code-input', spellcheck: false });
   const roomInput = h('input', {
     type: 'text',
     maxLength: 32,
@@ -89,6 +90,7 @@ export function renderHome(ctx: HomeContext): HTMLElement {
       room.warnings.forEach((w) => toast(w));
       ctx.openRoom(session, room);
     } catch (e: any) {
+      void window.jaca.log('criar', `${e instanceof JoinError ? e.code : 'erro'}: ${String(e?.message ?? e)} (modo ${ctx.cfg.connectionMode})`);
       await window.jaca.closeRoom();
       toast(e instanceof JoinError ? (e.code === 'UNREACHABLE' && ctx.cfg.connectionMode === 'cloudflare' ? UNREACHABLE_CLOUD_TEXT : (JOIN_ERROR_TEXT[e.code] ?? e.message)) : String(e?.message ?? e), 'error');
       createBtn.disabled = false;
@@ -118,6 +120,7 @@ export function renderHome(ctx: HomeContext): HTMLElement {
       }
       ctx.openRoom(session, null);
     } catch (e: any) {
+      void window.jaca.log('entrar', `${e instanceof JoinError ? e.code : 'erro'}: ${String(e?.message ?? e)} (${invite.kind === 'cloud' ? 'Cloudflare, conta ' + invite.subdomain : 'direto'})`); // never the full code: it is a way into the room
       let text = e instanceof JoinError ? (JOIN_ERROR_TEXT[e.code] ?? e.message) : String(e?.message ?? 'Falha ao entrar na sala.');
       if (e instanceof JoinError && (e.code === 'UNREACHABLE' || e.code === 'TIMEOUT') && invite.kind === 'cloud') {
         // find out whether this PC's network is the problem, instead of just saying it failed
@@ -125,6 +128,7 @@ export function renderHome(ctx: HomeContext): HTMLElement {
         const base = await window.jaca.workerWsBase(invite.subdomain);
         text = base ? await diagnoseCloud(base, invite.subdomain) : UNREACHABLE_CLOUD_TEXT;
       }
+      void window.jaca.log('rede', `mensagem mostrada: ${text}`);
       toast(text, 'error');
       joinBtn.disabled = false;
       joinBtn.textContent = 'Entrar';

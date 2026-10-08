@@ -121,12 +121,12 @@ export function renderRoom(ctx: RoomContext): { el: HTMLElement; dispose(): void
     onclick: () => session.stopViewing(),
   });
   stopBtn.innerHTML = SCREEN_X_SVG; // static markup, no user data
-  // Three areas: who/what you are watching (left, always visible), the stop button (center) and volume + fullscreen (right).
-  // The center and right controls (.pb-hover) only show while the pointer is over the picture.
+  // Three areas: who/what you are watching (left), the stop button (center) and volume + fullscreen (right).
+  // All of them (.pb-hover) only show while the pointer is over the picture, so nothing covers the shared screen the rest of the time.
   const playerBar = h(
     'div',
     { class: 'player-bar' },
-    h('div', { class: 'pb-left' }, netInfo, playerTitle),
+    h('div', { class: 'pb-left pb-hover' }, netInfo, playerTitle),
     h('div', { class: 'pb-center pb-hover' }, stopBtn),
     h('div', { class: 'pb-right pb-hover' }, volumeGroup, fsBtn),
   );

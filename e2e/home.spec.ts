@@ -265,3 +265,20 @@ test('Settings > Notificações: volume control saved in the config, mute button
     await a.close();
   }
 });
+
+test('the code field takes a whole Cloudflare code, also with a long account name (it used to cut the end at 24 characters)', async () => {
+  const a = await launchApp('long-code', { name: 'Ana' });
+  try {
+    const field = a.page.getByPlaceholder('XXXX-XXXX-XXXX-XXXX');
+    for (const code of ['QVHFG-SPNJF@ramonlopesdev', 'QVHFG-SPNJF@' + 'a'.repeat(63)]) {
+      await field.fill(code);
+      await expect(field).toHaveValue(code);
+    }
+    // a code with a wrong account is explained as such, not as a network problem
+    await field.fill('QVHFG-SPNJF@conta-que-nao-existe-xyz-123');
+    await a.page.getByRole('button', { name: 'Entrar', exact: true }).click();
+    await expect(a.page.locator('.toast.error')).toContainText('não existe', { timeout: 40_000 });
+  } finally {
+    await a.close();
+  }
+});

@@ -8,6 +8,10 @@ import { Session } from './session';
 import { initTitlebar } from './titlebar';
 import { initUpdateBanner, setInRoom } from './update-banner';
 
+// errors nobody caught in the window go to the log file too (see "Registro de erros" in Settings > Sobre)
+window.addEventListener('error', (e) => void window.jaca.log('erro', `erro na janela: ${e.message} (${e.filename?.split('/').pop() ?? ''}:${e.lineno})`));
+window.addEventListener('unhandledrejection', (e) => void window.jaca.log('erro', `promessa rejeitada na janela: ${String((e.reason as Error)?.stack ?? e.reason)}`));
+
 const root = document.getElementById('app')!;
 let cfg: AppConfig;
 let dispose: (() => void) | null = null;

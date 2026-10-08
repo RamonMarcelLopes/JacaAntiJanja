@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld('jaca', {
   saveWorker: (subdomain: string, key: string) => ipcRenderer.invoke('worker:save', subdomain, key),
   testWorker: () => ipcRenderer.invoke('worker:test'),
   workerReachable: (subdomain: string) => ipcRenderer.invoke('worker:reach', subdomain),
+  log: (kind: string, text: string) => ipcRenderer.invoke('log:write', kind, text),
+  openLogFolder: () => ipcRenderer.invoke('log:open'),
   openWorkerDeploy: () => ipcRenderer.invoke('worker:open-deploy'),
   clearWorker: () => ipcRenderer.invoke('worker:clear'),
   workerWsBase: (subdomain: string) => ipcRenderer.invoke('worker:ws-base', subdomain),

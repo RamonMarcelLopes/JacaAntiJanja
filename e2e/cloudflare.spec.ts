@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { launchApp, TestApp } from './app';
 import { CLAIM_URL, OWNER_KEY, startWorker, WORKER_URL } from './worker';
@@ -287,5 +288,47 @@ test('a Worker published with the button: pasting its address with no key makes 
   } finally {
     await a.close();
     await b.close();
+  }
+});
+
+test('the Cloudflare connection survives a reinstall (a copy kept outside the app data), and "Remover" forgets it for good', async () => {
+  const backup = fs.mkdtempSync(path.join(os.tmpdir(), 'jaj-backup-'));
+  const keepEnv = { JACA_WORKER_URL: WORKER_URL, JACA_BACKUP_DIR: backup };
+  try {
+    const a = await launchApp('keep-a', { name: 'Ramon' }, keepEnv);
+    try {
+      await configureWorker(a, 'ramon');
+      await expect.poll(() => readConfig(a).connectionMode).toBe('cloudflare');
+    } finally {
+      await a.close(); // its whole data folder is deleted, like uninstalling
+    }
+    const copy = fs.readFileSync(path.join(backup, 'cloudflare.json'), 'utf8');
+    expect(copy).not.toContain(OWNER_KEY); // the key in the copy is protected by Windows, never plain text
+
+    // "reinstalled": a new app with empty data finds the copy and has the Worker again, in the same mode
+    const b = await launchApp('keep-b', { name: 'Ramon' }, keepEnv);
+    try {
+      expect(readConfig(b).workerSubdomain).toBe('ramon');
+      expect(readConfig(b).connectionMode).toBe('cloudflare');
+      await expect(b.page.locator('.conn-badge')).toHaveText('Cloudflare');
+      await openRede(b);
+      await expect(b.page.getByText('Worker configurado: jaca-sala.ramon.workers.dev')).toBeVisible();
+      await b.page.getByRole('tabpanel', { name: 'Rede' }).getByRole('button', { name: 'Remover' }).click(); // not the avatar's "Remover" on the home screen underneath
+      await expect(b.page.locator('.toast', { hasText: 'Worker removido' })).toBeVisible();
+    } finally {
+      await b.close();
+    }
+    expect(fs.existsSync(path.join(backup, 'cloudflare.json'))).toBe(false);
+
+    // removed on purpose: a later install starts clean
+    const c = await launchApp('keep-c', { name: 'Ramon' }, keepEnv);
+    try {
+      expect(readConfig(c).workerSubdomain ?? '').toBe('');
+      await expect(c.page.locator('.conn-badge')).toHaveText('VPN');
+    } finally {
+      await c.close();
+    }
+  } finally {
+    fs.rmSync(backup, { recursive: true, force: true });
   }
 });

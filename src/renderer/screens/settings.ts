@@ -349,6 +349,7 @@ export function renderSettings(ctx: SettingsContext): { el: HTMLElement; dispose
     field('Chave do dono (opcional)', keyInput, 'Deixe vazio para o app criar a chave sozinho. Preencha só se você publicou pelo comando ou já tem uma chave. Fica guardada criptografada neste PC e nunca aparece na tela. Não é a chave da sua conta da Cloudflare.'),
     h('div', { class: 'row wrap' }, saveWorkerBtn, testWorkerBtn, clearWorkerBtn),
     cloudStatus,
+    h('p', { class: 'muted' }, 'Se você desinstalar o app, a conexão com o seu Worker fica guardada neste PC (protegida pelo seu usuário do Windows) e volta sozinha quando instalar de novo. "Remover" apaga de vez.'),
   );
 
   // the mode choice: a segmented control with a sliding highlight, like Telas / Janelas
@@ -440,7 +441,17 @@ export function renderSettings(ctx: SettingsContext): { el: HTMLElement; dispose
       field('FPS padrão', select<number>(cfg.fps, [[30, '30'], [60, '60']], (v) => void ctx.update({ fps: Number(v) as Fps }))),
       field('Modo padrão', select<ShareMode>(cfg.mode, [['motion', 'Movimento (jogos/vídeo)'], ['detail', 'Detalhe (texto/código)']], (v) => void ctx.update({ mode: v as ShareMode }))),
     ),
-    sobre: h('section', {}, h('h2', {}, 'Sobre'), versionText, checkBtn, updateText),
+    sobre: h(
+      'section',
+      {},
+      h('h2', {}, 'Sobre'),
+      versionText,
+      checkBtn,
+      updateText,
+      h('h3', { class: 'sound-group-title' }, 'Registro de erros'),
+      h('p', { class: 'muted' }, 'Quando algo dá errado (entrar numa sala, criar uma sala, rede), o app anota num arquivo de texto neste PC. Nada de chaves nem do código inteiro da sala. Se precisar de ajuda, mande esse arquivo.'),
+      h('button', { onclick: () => void window.jaca.openLogFolder() }, 'Abrir pasta do registro'),
+    ),
   };
 
   // ---- sidebar (left): icon + category name; one panel visible at a time
