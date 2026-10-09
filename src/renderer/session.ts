@@ -25,6 +25,8 @@ export class Session {
   private joinedAt = 0;
   /** True when the shared audio cannot contain this app's own playback (single-window capture). */
   audioIsolated = false;
+  /** True while the connection to the room is down and the app is trying to get back in. */
+  reconnecting = false;
   onChange: () => void = () => undefined;
   onEnded: (reason: EndReason) => void = () => undefined;
   onNotice: (text: string, kind: 'info' | 'error') => void = () => undefined;
@@ -75,7 +77,34 @@ export class Session {
     s.pm.setCodec(cfg.codec);
     sig.onMessage = (m) => void s.handle(m);
     sig.onClose = (reason) => s.finish(reason);
+    sig.onReconnecting = (active) => {
+      s.reconnecting = active;
+      if (active) s.onNotice('Conexão com a sala caiu. Reconectando…', 'error');
+      s.onChange();
+    };
+    sig.onResumed = (w) => s.reconcile(w.peers);
     return s;
+  }
+
+  /**
+   * After the connection to the room came back: messages sent during the gap were lost, so the participant list is
+   * brought in line with what the room says now.
+   */
+  private reconcile(current: PeerInfo[]): void {
+    const ids = new Set(current.map((p) => p.peerId));
+    for (const id of [...this.peers.keys()]) {
+      if (id === this.selfId || ids.has(id)) continue;
+      this.peers.delete(id);
+      this.pm.peerLeft(id);
+    }
+    for (const p of current) {
+      const known = this.peers.get(p.peerId);
+      if (known) Object.assign(known, { name: p.name, avatar: p.avatar, share: p.share });
+      else this.peers.set(p.peerId, { ...p, quality: 'unknown', rtt: null });
+    }
+    if (this.viewing && this.viewing !== this.selfId && !this.peers.get(this.viewing)?.share) this.stopViewing();
+    this.onNotice('Reconectado à sala.', 'info');
+    this.onChange();
   }
 
   /** Time the room has been open, or null when the host did not report it. */

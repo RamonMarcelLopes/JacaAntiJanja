@@ -431,7 +431,7 @@ function registerIpc(): void {
   });
   // the renderer reports what went wrong (join and room creation errors); only short text, only a few kinds
   ipcMain.handle('log:write', (_e, kind: unknown, text: unknown) => {
-    if (typeof kind === 'string' && ['entrar', 'criar', 'rede', 'erro'].includes(kind) && typeof text === 'string') logEvent(kind, text);
+    if (typeof kind === 'string' && ['entrar', 'criar', 'rede', 'erro', 'sala'].includes(kind) && typeof text === 'string') logEvent(kind, text);
   });
   ipcMain.handle('log:open', () => {
     if (!fs.existsSync(logPath())) logEvent('info', 'registro aberto pelo usuário');
@@ -534,6 +534,7 @@ function createWindow(): void {
       nodeIntegration: false,
       sandbox: true,
       autoplayPolicy: 'no-user-gesture-required',
+      backgroundThrottling: false,
     },
   });
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -582,6 +583,9 @@ function setupDevReload(): void {
   });
 }
 
+// A window behind other windows must keep its timers and connections running at full speed (pings to the room, call stats)
+app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();

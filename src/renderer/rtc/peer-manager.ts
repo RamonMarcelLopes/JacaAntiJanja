@@ -247,7 +247,9 @@ export class PeerManager {
       conn.remoteStream = stream;
       if (this.watching === peerId) this.events.onStream(peerId, stream);
     };
+    pc.oniceconnectionstatechange = () => void window.jaca.log('sala', `ICE com ${peerId.slice(0, 4)}: ${pc.iceConnectionState}`);
     pc.onconnectionstatechange = () => {
+      void window.jaca.log('sala', `conexão WebRTC com ${peerId.slice(0, 4)}: ${pc.connectionState}`);
       if (pc.connectionState === 'failed') {
         this.events.onConnectionFailed(peerId);
         pc.restartIce();

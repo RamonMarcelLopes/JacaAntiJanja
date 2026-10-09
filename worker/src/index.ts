@@ -130,6 +130,17 @@ interface Attachment {
   name?: string;
   avatar?: string | null;
   share?: ShareInfo | null;
+  /** Secret handed to the client on join; with it a dropped client takes its place back (same peerId) within RESUME_GRACE_MS. */
+  resumeToken?: string;
+}
+
+/** How long a participant whose connection dropped is kept in the room while the app tries to reconnect. */
+const RESUME_GRACE_MS = 60_000;
+const AWAY_PREFIX = 'away:';
+
+interface Away {
+  att: Attachment;
+  until: number;
 }
 
 const toInfo = (a: Attachment): PeerInfo => ({ peerId: a.peerId!, name: a.name ?? '', avatar: a.avatar ?? null, share: a.share ?? null });
@@ -186,19 +197,35 @@ export class Room extends DurableObject<Env> {
     this.handleMessage(ws, att, msg);
   }
 
-  async webSocketClose(ws: WebSocket): Promise<void> {
-    await this.onLeave(ws);
+  async webSocketClose(ws: WebSocket, _code: number, reason: string): Promise<void> {
+    await this.onDisconnect(ws, reason === 'leave');
   }
 
   async webSocketError(ws: WebSocket): Promise<void> {
-    await this.onLeave(ws);
+    await this.onDisconnect(ws, false);
   }
 
-  /** An owner who never joined: clean up the room. */
+  /**
+   * Two jobs: an owner who never joined (clean up the room), and participants whose connection dropped and did not come back
+   * in time (they leave now, which for the host means the room is over).
+   */
   async alarm(): Promise<void> {
-    if (this.joined().length === 0) {
+    const now = Date.now();
+    let next = 0;
+    for (const [key, entry] of await this.awayEntries()) {
+      if (entry.until > now) {
+        next = next === 0 ? entry.until : Math.min(next, entry.until);
+        continue;
+      }
+      await this.ctx.storage.delete(key);
+      await this.leave(entry.att);
+    }
+    if (!(await this.ctx.storage.get<Meta>('meta'))) return; // the host's leave already ended the room
+    if (this.joined().length === 0 && next === 0) {
       for (const ws of this.ctx.getWebSockets()) this.safeClose(ws, 1000, 'room-closed');
       await this.ctx.storage.deleteAll();
+    } else if (next > 0) {
+      await this.ctx.storage.setAlarm(next);
     }
   }
 
@@ -210,10 +237,12 @@ export class Room extends DurableObject<Env> {
     if (!name) return this.reject(ws, 'BAD_REQUEST');
     const meta = await this.ctx.storage.get<Meta>('meta');
     if (!meta) return this.reject(ws, 'ROOM_CLOSED');
-    const peers = this.joined();
-    const hostPresent = peers.some(([, a]) => a.isHost);
+    const resume = p.resume as { peerId?: unknown; token?: unknown } | undefined;
+    if (resume && typeof resume.peerId === 'string' && typeof resume.token === 'string') return this.handleResume(ws, att, meta, resume.peerId, resume.token);
+    const roster = await this.roster();
+    const hostPresent = roster.some((a) => a.isHost);
     if (att.create ? hostPresent : !hostPresent) return this.reject(ws, att.create ? 'BAD_REQUEST' : 'ROOM_CLOSED');
-    if (peers.length >= MAX_PEERS) return this.reject(ws, 'ROOM_FULL');
+    if (roster.length >= MAX_PEERS) return this.reject(ws, 'ROOM_FULL');
 
     if (att.create) {
       meta.roomName = cleanRoomName(p.roomName, name);
@@ -222,15 +251,41 @@ export class Room extends DurableObject<Env> {
     }
     const avatar = typeof p.avatar === 'string' && p.avatar.startsWith('data:image/') ? p.avatar : null;
     const peerId = crypto.randomUUID().replace(/-/g, '').slice(0, 12);
-    const me: Attachment = { ...att, peerId, name, avatar, share: null, isHost: att.create };
+    const resumeToken = p.canResume === true ? crypto.randomUUID().replace(/-/g, '') : undefined; // only clients that announce the feature get a place kept (older apps leave with a plain close)
+    const me: Attachment = { ...att, peerId, name, avatar, share: null, isHost: att.create, resumeToken };
     ws.serializeAttachment(me);
     ws.send(
       JSON.stringify({
         type: 'welcome',
-        payload: { peerId, peers: peers.map(([, a]) => toInfo(a)), roomName: meta.roomName, roomAgeMs: Date.now() - meta.createdAt, inviteCode: meta.inviteCode },
+        payload: { peerId, resumeToken, peers: roster.map(toInfo), roomName: meta.roomName, roomAgeMs: Date.now() - meta.createdAt, inviteCode: meta.inviteCode },
       }),
     );
     this.broadcast({ type: 'peer-joined', payload: toInfo(me) }, peerId);
+  }
+
+  /** A client whose connection dropped asks for its place back: same peerId, same role, same share, no one is told it ever left. */
+  private async handleResume(ws: WebSocket, att: Attachment, meta: Meta, peerId: string, token: string): Promise<void> {
+    const key = AWAY_PREFIX + peerId;
+    const away = await this.ctx.storage.get<Away>(key);
+    let old: Attachment | null = away && away.att.resumeToken === token ? away.att : null;
+    for (const [other, a] of this.joined()) {
+      if (a.peerId !== peerId) continue;
+      if (a.resumeToken !== token) return this.reject(ws, 'BAD_TOKEN');
+      old = a;
+      // the old socket is dead but the Worker has not noticed yet: it must not count as the participant leaving
+      other.serializeAttachment({ peerId: null, create: false } satisfies Attachment);
+      this.safeClose(other, 1000, 'replaced');
+    }
+    if (!old) return this.reject(ws, 'ROOM_CLOSED'); // grace period over (or never existed): the participant is gone
+    await this.ctx.storage.delete(key);
+    ws.serializeAttachment({ ...old, create: false } satisfies Attachment);
+    const roster = (await this.roster()).filter((a) => a.peerId !== peerId);
+    ws.send(
+      JSON.stringify({
+        type: 'welcome',
+        payload: { peerId, resumeToken: token, resumed: true, peers: roster.map(toInfo), roomName: meta.roomName, roomAgeMs: Date.now() - meta.createdAt, inviteCode: meta.inviteCode },
+      }),
+    );
   }
 
   private handleMessage(ws: WebSocket, att: Attachment, msg: Message): void {
@@ -267,9 +322,19 @@ export class Room extends DurableObject<Env> {
     }
   }
 
-  private async onLeave(ws: WebSocket): Promise<void> {
+  /** A socket closed: when the person did not choose to leave, keep their place for a while so they can reconnect. */
+  private async onDisconnect(ws: WebSocket, chosenToLeave: boolean): Promise<void> {
     const att = ws.deserializeAttachment() as Attachment | null;
     if (!att?.peerId) return;
+    if (chosenToLeave || !att.resumeToken || !(await this.ctx.storage.get('meta'))) return this.leave(att);
+    const until = Date.now() + RESUME_GRACE_MS;
+    await this.ctx.storage.put<Away>(AWAY_PREFIX + att.peerId, { att, until });
+    const current = await this.ctx.storage.getAlarm();
+    if (current === null || current > until) await this.ctx.storage.setAlarm(until);
+  }
+
+  private async leave(att: Attachment): Promise<void> {
+    if (!att.peerId) return;
     if (att.isHost) {
       // the room lives as long as its owner does
       this.broadcast({ type: 'room-closed', payload: {} }, att.peerId);
@@ -281,6 +346,17 @@ export class Room extends DurableObject<Env> {
   }
 
   // ------------------------------------------------------------------ helpers
+
+  private async awayEntries(): Promise<Map<string, Away>> {
+    return this.ctx.storage.list<Away>({ prefix: AWAY_PREFIX });
+  }
+
+  /** Everyone who is in the room: connected now, or disconnected but still inside the grace period. */
+  private async roster(): Promise<Attachment[]> {
+    const live = this.joined().map(([, a]) => a);
+    const away = [...(await this.awayEntries()).values()].map((e) => e.att);
+    return [...live, ...away];
+  }
 
   private joined(): Array<[WebSocket, Attachment]> {
     const out: Array<[WebSocket, Attachment]> = [];

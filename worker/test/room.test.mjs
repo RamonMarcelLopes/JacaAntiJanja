@@ -34,15 +34,15 @@ function open(path) {
 }
 const send = (ws, type, payload = {}, to = null) => ws.send(JSON.stringify({ type, to, payload }));
 
-async function createRoom(id, name = 'Ana', roomName = 'Sala X') {
+async function createRoom(id, name = 'Ana', roomName = 'Sala X', canResume = false) {
   const c = await open(`/ws/${id}?create=1&key=${KEY}`);
-  send(c.ws, 'join', { token: 0, name, avatar: null, roomName });
+  send(c.ws, 'join', { token: 0, name, avatar: null, roomName, ...(canResume ? { canResume } : {}) });
   await wait();
   return c;
 }
-async function joinGuest(id, name = 'Bia') {
+async function joinGuest(id, name = 'Bia', canResume = false) {
   const g = await open(`/ws/${id}`);
-  send(g.ws, 'join', { token: 0, name, avatar: null });
+  send(g.ws, 'join', { token: 0, name, avatar: null, ...(canResume ? { canResume } : {}) });
   await wait();
   return g;
 }
@@ -218,4 +218,68 @@ test('a Worker with an OWNER_KEY secret never accepts a claim', async () => {
   const res = await fetch(`${HTTP}/api/claim`, { method: 'POST', body: JSON.stringify({ key: 'z'.repeat(32) }) });
   assert.equal(res.status, 403);
   assert.equal((await fetch(`${HTTP}/api/check?key=${KEY}`)).status, 200);
+});
+
+test('a dropped guest keeps its place and takes it back with the resume token (nobody is told it left)', async () => {
+  const id = roomId();
+  const host = await createRoom(id, 'Ana', 'Sala X', true);
+  const guest = await joinGuest(id, 'Bia', true);
+  const welcome = guest.msgs.find((m) => m.type === 'welcome').payload;
+  assert.match(welcome.resumeToken, /^[0-9a-f]{32}$/);
+
+  guest.ws.terminate(); // a connection that just disappears
+  await wait(600);
+  assert.equal(host.msgs.some((m) => m.type === 'peer-left'), false, 'the host is not told yet');
+
+  const back = await open(`/ws/${id}`);
+  send(back.ws, 'join', { token: 0, name: 'Bia', avatar: null, resume: { peerId: welcome.peerId, token: welcome.resumeToken } });
+  await wait();
+  const again = back.msgs.find((m) => m.type === 'welcome').payload;
+  assert.equal(again.resumed, true);
+  assert.equal(again.peerId, welcome.peerId);
+  assert.deepEqual(again.peers.map((p) => p.name), ['Ana']);
+  assert.equal(host.msgs.some((m) => m.type === 'peer-left'), false);
+
+  // messages reach the resumed socket and come from the same id
+  send(host.ws, 'offer', { sdp: 'x' }, welcome.peerId);
+  await wait();
+  assert.ok(back.msgs.some((m) => m.type === 'offer'));
+});
+
+test('a wrong resume token is refused, and choosing to leave is immediate', async () => {
+  const id = roomId();
+  const host = await createRoom(id, 'Ana', 'Sala X', true);
+  const guest = await joinGuest(id, 'Bia', true);
+  const welcome = guest.msgs.find((m) => m.type === 'welcome').payload;
+
+  const thief = await open(`/ws/${id}`);
+  send(thief.ws, 'join', { token: 0, name: 'Eve', avatar: null, resume: { peerId: welcome.peerId, token: 'f'.repeat(32) } });
+  await wait();
+  assert.equal(thief.msgs.find((m) => m.type === 'error')?.payload.code, 'BAD_TOKEN');
+
+  guest.ws.close(1000, 'leave');
+  await wait();
+  assert.ok(host.msgs.some((m) => m.type === 'peer-left' && m.payload.peerId === welcome.peerId));
+});
+
+test('a host whose connection dropped can come back without ?create and the room stays open', async () => {
+  const id = roomId();
+  const host = await createRoom(id, 'Ana', 'Sala X', true);
+  const hostWelcome = host.msgs.find((m) => m.type === 'welcome').payload;
+  const guest = await joinGuest(id, 'Bia', true);
+
+  host.ws.terminate();
+  await wait(600);
+  assert.equal(guest.msgs.some((m) => m.type === 'room-closed'), false, 'the room stays open during the grace period');
+
+  const back = await open(`/ws/${id}`);
+  send(back.ws, 'join', { token: 0, name: 'Ana', avatar: null, resume: { peerId: hostWelcome.peerId, token: hostWelcome.resumeToken } });
+  await wait();
+  assert.equal(back.msgs.find((m) => m.type === 'welcome').payload.resumed, true);
+  assert.equal(guest.msgs.some((m) => m.type === 'room-closed'), false);
+
+  // the room is still the host's: closing for real ends it for everyone
+  back.ws.close(1000, 'leave');
+  await wait();
+  assert.ok(guest.msgs.some((m) => m.type === 'room-closed'));
 });

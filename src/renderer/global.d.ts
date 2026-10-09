@@ -14,7 +14,7 @@ declare global {
       saveWorker(subdomain: string, key: string): Promise<WorkerSaveResult>;
       testWorker(): Promise<WorkerSaveResult>;
       workerReachable(subdomain: string): Promise<{ ok: boolean; detail: string; nameUnknown: boolean }>;
-      log(kind: 'entrar' | 'criar' | 'rede' | 'erro', text: string): Promise<void>;
+      log(kind: 'entrar' | 'criar' | 'rede' | 'erro' | 'sala', text: string): Promise<void>;
       openLogFolder(): Promise<void>;
       openWorkerDeploy(): Promise<void>;
       clearWorker(): Promise<void>;
