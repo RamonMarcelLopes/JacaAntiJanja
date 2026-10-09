@@ -138,3 +138,34 @@ test('sharing a screen: the guest sees "AO VIVO", watches the video with audio, 
     await host.close();
   }
 });
+
+// Needs a real desktop session too.
+test('while you share a whole screen: people entering and leaving still sound, and your own screen cannot go fullscreen on the monitor it captures', async () => {
+  test.slow();
+  const host = await launchApp('share2-host', { name: 'Ana', hostAddressOverride: '127.0.0.1', port: 47855 });
+  const guest = await launchApp('share2-guest', { name: 'Bia' });
+  try {
+    const code = await createRoom(host.page);
+    await host.page.getByRole('button', { name: 'Compartilhar tela' }).click();
+    const dialog = host.page.locator('.dialog');
+    await expect(dialog.locator('.source').first()).toBeVisible();
+    await dialog.getByRole('button', { name: 'Compartilhar', exact: true }).click();
+    await expect(host.page.getByRole('button', { name: 'Parar de compartilhar' })).toBeVisible({ timeout: 20_000 });
+
+    // entering and leaving are heard even though incoming audio is muted while a whole screen is shared
+    await joinRoom(guest.page, code);
+    await expect.poll(() => sounds(host.page)).toContain('peer-join');
+    await guest.page.getByRole('button', { name: 'Sair' }).click();
+    await expect.poll(() => sounds(host.page)).toContain('peer-leave');
+
+    // own preview: the app window sits on the first monitor, which is also the one being shared
+    await host.page.locator('.peer.live', { hasText: 'Ana' }).click();
+    await host.page.locator('.player').hover();
+    await host.page.locator('.player-bar').getByRole('button', { name: /tela cheia/i }).click();
+    await expect(host.page.locator('.toast', { hasText: 'Mova o app para outro monitor' })).toBeVisible();
+    expect(await host.page.evaluate(() => document.fullscreenElement === null)).toBe(true);
+  } finally {
+    await guest.close();
+    await host.close();
+  }
+});

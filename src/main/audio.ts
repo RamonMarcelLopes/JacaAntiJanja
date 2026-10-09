@@ -68,7 +68,7 @@ function runHelper(exe: string, args: string[], onData: (chunk: Buffer) => void,
         finish(
           fail(
             /not found/.test(err[1])
-              ? `${name || 'O processo'} não está aberto; usando o áudio completo do sistema.`
+              ? '' // the excluded app is not running: the whole system audio is shared and there is nothing to warn about
               : `Captura de áudio isolada indisponível (${err[1]}).`,
           ),
         );

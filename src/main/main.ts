@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, desktopCapturer, ipcMain, net as electronNet, safeStorage, session, shell } from 'electron';
+import { app, BrowserWindow, clipboard, desktopCapturer, ipcMain, net as electronNet, safeStorage, screen, session, shell } from 'electron';
 import { randomBytes } from 'node:crypto';
 import dns from 'node:dns';
 import fs from 'node:fs';
@@ -492,6 +492,13 @@ function registerIpc(): void {
   ipcMain.handle('update:install', () => installUpdate());
   ipcMain.handle('capture:select', (_e, id: string) => {
     selectedSourceId = typeof id === 'string' ? id : null;
+  });
+  // True when this app's window is on the monitor that `sourceId` shares (the preview in fullscreen would then capture itself)
+  ipcMain.handle('capture:on-app-monitor', async (_e, sourceId: unknown) => {
+    if (typeof sourceId !== 'string' || !sourceId.startsWith('screen:') || !win) return false;
+    const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 0, height: 0 } });
+    const shared = sources.find((s) => s.id === sourceId);
+    return !!shared && shared.display_id === String(screen.getDisplayMatching(win.getBounds()).id);
   });
 }
 

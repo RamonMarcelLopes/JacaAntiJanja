@@ -90,9 +90,14 @@ export function renderRoom(ctx: RoomContext): { el: HTMLElement; dispose(): void
   const netInfo = h('span', { class: 'netinfo', tabIndex: 0 }, netTip);
   netInfo.insertAdjacentHTML('afterbegin', SIGNAL_SVG); // static markup, no user data
   const placeholder = h('div', { class: 'player-empty' }, 'Quando alguém estiver ao vivo, clique no nome dele para assistir.');
-  const toggleFullscreen = () => {
-    if (document.fullscreenElement) void document.exitFullscreen();
-    else void player.requestFullscreen?.();
+  const toggleFullscreen = async () => {
+    if (document.fullscreenElement) return void document.exitFullscreen();
+    // Your own screen in fullscreen on the monitor it is capturing would capture itself (an endless tunnel of previews whose colors drift to green)
+    if (session.viewing === session.selfId && session.sharedSourceId && (await window.jaca.isOnAppMonitor(session.sharedSourceId))) {
+      toast('Você está compartilhando o monitor onde o app está. Mova o app para outro monitor para ver sua tela em tela cheia.', 'error');
+      return;
+    }
+    void player.requestFullscreen?.();
   };
   video.addEventListener('dblclick', toggleFullscreen);
   // Fullscreen is requested on the whole player (not just the video) so these controls stay visible and the
@@ -130,10 +135,7 @@ export function renderRoom(ctx: RoomContext): { el: HTMLElement; dispose(): void
     h('div', { class: 'pb-center pb-hover' }, stopBtn),
     h('div', { class: 'pb-right pb-hover' }, volumeGroup, fsBtn),
   );
-  // Your own whole-screen preview in fullscreen would capture itself: an endless tunnel of previews whose colors drift to green. The picture is
-  // replaced by this note while that is the case (a shared window, or someone else's screen, play normally).
-  const mirrorNote = h('div', { class: 'mirror-note' }, h('strong', {}, 'Você está ao vivo'), h('span', {}, 'A prévia da sua tela inteira fica oculta em tela cheia, senão ela captura a si mesma e a imagem fica verde.'));
-  const player = h('div', { class: 'player' }, video, placeholder, mirrorNote, playerBar);
+  const player = h('div', { class: 'player' }, video, placeholder, playerBar);
 
   // In fullscreen the controls (and the cursor) hide after a moment without mouse movement and come back on movement.
   let idleTimer: number | undefined;
@@ -560,8 +562,6 @@ export function renderRoom(ctx: RoomContext): { el: HTMLElement; dispose(): void
     playerBar.style.display = session.viewing ? 'grid' : 'none';
     const ownPreview = !!viewing && viewing.peerId === session.selfId && !!session.shareInfo;
     netInfo.style.display = ownPreview ? 'inline-flex' : 'none';
-    const sharingWholeScreen = (session.stream?.getVideoTracks()[0]?.getSettings() as MediaTrackSettings & { displaySurface?: string } | undefined)?.displaySurface === 'monitor';
-    player.classList.toggle('own-screen', ownPreview && sharingWholeScreen);
     volumeGroup.style.display = ownPreview ? 'none' : ''; // you never listen to your own screen
     if (ownPreview) {
       const info = session.shareInfo!;

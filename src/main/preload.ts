@@ -42,4 +42,5 @@ contextBridge.exposeInMainWorld('jaca', {
     ipcRenderer.on('update:state', (_e, state) => cb(state));
   },
   selectSource: (id: string) => ipcRenderer.invoke('capture:select', id),
+  isOnAppMonitor: (sourceId: string) => ipcRenderer.invoke('capture:on-app-monitor', sourceId),
 });

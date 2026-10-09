@@ -35,6 +35,7 @@ declare global {
       installUpdate(): Promise<void>;
       onUpdateState(cb: (state: UpdateState) => void): void;
       selectSource(id: string): Promise<void>;
+      isOnAppMonitor(sourceId: string): Promise<boolean>;
     };
   }
 }

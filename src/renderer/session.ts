@@ -133,7 +133,8 @@ export class Session {
    * cue would travel to everybody in the stream (sharing a single window isolates the audio and lifts this).
    */
   private cue(name: SoundName): void {
-    if (this.muteIncoming) return;
+    // entering and leaving always sound: a short blip in the stream is a fair price for knowing who comes and goes while you share
+    if (this.muteIncoming && name !== 'peer-join' && name !== 'peer-leave') return;
     playSound(name);
   }
 
@@ -232,13 +233,17 @@ export class Session {
 
   private local: MediaStream | null = null;
 
+  /** Id of the screen or window being shared (null when not sharing). */
+  sharedSourceId: string | null = null;
+
   async startSharing(sourceId: string, info: ShareInfo): Promise<void> {
     await window.jaca.selectSource(sourceId);
     // getDisplayMedia needs a recent user gesture, so it is called before anything slow.
     // It asks for the full system audio (loopback) as the fallback track.
     const { width, height } = RESOLUTIONS[info.resolution];
     const stream = await navigator.mediaDevices.getDisplayMedia({
-      video: { width: { ideal: width }, height: { ideal: height }, frameRate: { ideal: info.fps } },
+      // cursor 'motion': the pointer shows only while it moves, so it disappears when another app hides it (a full-screen video does so after a moment)
+      video: { width: { ideal: width }, height: { ideal: height }, frameRate: { ideal: info.fps }, cursor: 'motion' } as MediaTrackConstraints,
       audio: true,
     });
     // Capture is granted. The helper that records the audio only starts after this, so the cue does not end up in the stream.
@@ -261,13 +266,14 @@ export class Session {
         this.audioIsolated = false;
         await window.jaca.stopAudio();
       }
-    } else {
+    } else if (audio.message) {
       this.onNotice(`${audio.message} Pode haver eco do Discord; use fones.`, 'info');
     }
     const video = stream.getVideoTracks()[0];
     video.contentHint = info.mode === 'detail' ? 'detail' : 'motion';
     video.onended = () => this.stopSharing();
     this.local = stream;
+    this.sharedSourceId = sourceId;
     this.shareInfo = info;
     this.me().share = info;
     this.pm.startShare(stream, info);
@@ -289,6 +295,7 @@ export class Session {
     this.native = null;
     void window.jaca.stopAudio();
     this.local = null;
+    this.sharedSourceId = null;
     this.shareInfo = null;
     this.audioNote = '';
     this.audioIsolated = false;

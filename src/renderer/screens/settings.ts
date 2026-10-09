@@ -448,9 +448,13 @@ export function renderSettings(ctx: SettingsContext): { el: HTMLElement; dispose
       versionText,
       checkBtn,
       updateText,
-      h('h3', { class: 'sound-group-title' }, 'Registro de erros'),
-      h('p', { class: 'muted' }, 'Quando algo dá errado (entrar numa sala, criar uma sala, rede), o app anota num arquivo de texto neste PC. Nada de chaves nem do código inteiro da sala. Se precisar de ajuda, mande esse arquivo.'),
-      h('button', { onclick: () => void window.jaca.openLogFolder() }, 'Abrir pasta do registro'),
+      h(
+        'div',
+        { class: 'about-card' },
+        h('h3', {}, 'Registro de erros'),
+        h('p', { class: 'muted' }, 'Quando algo dá errado (entrar numa sala, criar uma sala, quedas de conexão, rede), o app anota num arquivo de texto neste PC. Nunca vão chaves nem o código inteiro da sala. Se precisar de ajuda, mande esse arquivo.'),
+        h('button', { onclick: () => void window.jaca.openLogFolder() }, 'Abrir pasta do registro'),
+      ),
     ),
   };
 

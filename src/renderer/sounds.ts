@@ -45,6 +45,11 @@ const SOUNDS: Record<SoundName, Note[]> = {
 
 let ctx: AudioContext | null = null;
 let volume = 0.6; // 0..1
+// when audio devices come or go the old context may keep playing into nothing: drop it, the next sound builds a new one
+navigator.mediaDevices?.addEventListener?.('devicechange', () => {
+  void ctx?.close().catch(() => undefined);
+  ctx = null;
+});
 const lastPlayed = new Map<SoundName, number>();
 const disabled = new Set<string>();
 
@@ -69,8 +74,12 @@ export function playSound(name: SoundName, preview = false): void {
   if (volume <= 0) return;
 
   try {
-    ctx ??= new AudioContext();
-    if (ctx.state === 'suspended') void ctx.resume();
+    // a context left over from before the output device changed (headset plugged, VPN/audio driver restart) can stay silent for good: start a new one
+    if (!ctx || ctx.state === 'closed' || ctx.state === ('interrupted' as AudioContextState)) {
+      void ctx?.close().catch(() => undefined);
+      ctx = new AudioContext();
+    }
+    if (ctx.state !== 'running') void ctx.resume();
     const t0 = ctx.currentTime + 0.01;
 
     const master = ctx.createGain();
