@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { discordText, parseDiscordWebhook } from '../shared/discord';
+import { closedEmbed, discordText, openedEmbed, parseDiscordWebhook } from '../shared/discord';
 import { encodeCloudInvite, encodeInvite, isValidSubdomain, parseInvite, parseWorkerAddress, roomIdFromBytes, workerHost } from '../shared/invite';
 import { cleanFavorites, cleanFixedRooms } from '../shared/rooms';
 import { AppConfig, CaptureSource, ConnectivityResult, DEFAULT_PORT, DiscordResult, FavoriteRoom, FixedRoom, FixedRoomInput, FixedRoomSaveResult, MAX_FAVORITE_ROOMS, MAX_FIXED_ROOMS, MAX_ROOM_NAME, RoomInfo, RoomStatus, SOUND_NAMES } from '../shared/protocol';
@@ -156,26 +156,123 @@ function readDiscordWebhook(room: FixedRoom): string | null {
   }
 }
 
-/** Sends one embed with the app icon attached. Nobody is ever pinged (allowed_mentions is empty). Never logs the address. */
-async function sendDiscordEmbed(webhook: string, embed: Record<string, unknown>): Promise<DiscordResult> {
+interface DiscordSend extends DiscordResult {
+  /** Id of the message that was created (posts only). */
+  id?: string;
+  /** The webhook or the message does not exist any more (somebody deleted it in Discord): nothing more can be done with it. */
+  gone?: boolean;
+}
+
+/** Where the requests go. A test run (never the installed app) can point this at a local server that plays Discord. */
+function discordTarget(webhook: string): string {
+  const base = !app.isPackaged ? process.env.JACA_DISCORD_BASE : undefined;
+  return base ? webhook.replace('https://discord.com', base.replace(/\/$/, '')) : webhook;
+}
+
+/** Posts (or edits, with PATCH) one message with the app icon attached, and the photo of the host when there is one. Nobody is ever pinged. Never logs the address. */
+async function callDiscord(method: 'POST' | 'PATCH', url: string, embed: Record<string, unknown>, avatar: Buffer | null): Promise<DiscordSend> {
   try {
     const icon = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'icon.png'));
     const payload = {
       username: 'Jaca anti Janja',
       allowed_mentions: { parse: [] },
-      embeds: [{ color: 0xf2b83c, thumbnail: { url: 'attachment://icon.png' }, footer: { text: 'Jaca anti Janja' }, timestamp: new Date().toISOString(), ...embed }],
+      embeds: [embed],
+      attachments: [{ id: 0, filename: 'icon.png' }, ...(avatar ? [{ id: 1, filename: 'host.jpg' }] : [])],
     };
     const form = new FormData();
     form.append('payload_json', JSON.stringify(payload));
     form.append('files[0]', new Blob([icon], { type: 'image/png' }), 'icon.png');
-    const res = await fetch(webhook, { method: 'POST', body: form, signal: AbortSignal.timeout(10_000) });
-    if (res.ok) return { ok: true, message: '' };
-    if (res.status === 404 || res.status === 401) return { ok: false, message: 'O Discord não aceitou esse webhook (ele foi apagado ou a URL está incompleta).' };
+    if (avatar) form.append('files[1]', new Blob([new Uint8Array(avatar)], { type: 'image/jpeg' }), 'host.jpg');
+    const res = await fetch(url, { method, body: form, signal: AbortSignal.timeout(10_000) });
+    if (res.ok) {
+      let id: string | undefined;
+      if (method === 'POST') id = String(((await res.json().catch(() => ({}))) as { id?: unknown }).id ?? '') || undefined;
+      return { ok: true, message: '', id };
+    }
+    if (res.status === 404 || res.status === 401 || res.status === 403) return { ok: false, gone: true, message: 'O Discord não aceitou esse webhook (ele foi apagado ou a URL está incompleta).' };
     if (res.status === 429) return { ok: false, message: 'O Discord pediu para esperar um pouco. Tente de novo em instantes.' };
     return { ok: false, message: `O Discord respondeu com erro ${res.status}.` };
   } catch {
     return { ok: false, message: 'Não consegui falar com o Discord. Confira a internet.' };
   }
+}
+
+const postDiscord = (webhook: string, embed: Record<string, unknown>, avatar: Buffer | null = null) => callDiscord('POST', `${discordTarget(webhook)}?wait=true`, embed, avatar);
+const editDiscord = (webhook: string, messageId: string, embed: Record<string, unknown>, avatar: Buffer | null = null) =>
+  callDiscord('PATCH', `${discordTarget(webhook)}/messages/${encodeURIComponent(messageId)}`, embed, avatar);
+
+/** The photo of the person as bytes, when they have one (it is shown next to their name in the notice). */
+function avatarBytes(cfg: AppConfig): Buffer | null {
+  const m = /^data:image\/(?:jpeg|jpg|png);base64,([A-Za-z0-9+/=]+)$/.exec(cfg.avatar ?? '');
+  return m ? Buffer.from(m[1], 'base64') : null;
+}
+
+// The notices that say "sala aberta" are kept in a small file, so one left open by an app that died is closed (edited) on the next start.
+interface OpenNotice {
+  roomId: string;
+  messageId: string;
+  openedAt: number;
+  host: string;
+  roomName: string;
+  code: string;
+}
+const noticesPath = () => path.join(app.getPath('userData'), 'discord-notices.json');
+const MAX_NOTICE_AGE_MS = 7 * 24 * 3600 * 1000; // a notice we could not close for a week is given up on
+
+function loadNotices(): OpenNotice[] {
+  try {
+    const raw = JSON.parse(fs.readFileSync(noticesPath(), 'utf8'));
+    if (!Array.isArray(raw)) return [];
+    return raw.filter((n): n is OpenNotice => !!n && typeof n.roomId === 'string' && typeof n.messageId === 'string' && typeof n.openedAt === 'number' && Date.now() - n.openedAt < MAX_NOTICE_AGE_MS);
+  } catch {
+    return [];
+  }
+}
+function saveNotices(list: OpenNotice[]): void {
+  try {
+    fs.mkdirSync(path.dirname(noticesPath()), { recursive: true });
+    fs.writeFileSync(noticesPath(), JSON.stringify(list));
+  } catch {
+    /* the notice is a nicety: never let it break the app */
+  }
+}
+
+/**
+ * Edits every notice that still says "Aberta" so it says "Fechada". `knownDuration` false is for the notices of an app that died:
+ * how long the room stayed open is not known then. A notice whose webhook (or message) was deleted in Discord is dropped without
+ * a word; one that could not be reached (no internet) is kept for the next start.
+ */
+function closeOpenNotices(knownDuration: boolean): Promise<void> {
+  return inNoticeQueue(async () => {
+    const pending = loadNotices();
+    if (!pending.length) return;
+    const cfg = loadConfig();
+    const avatar = avatarBytes(cfg);
+    const keep: OpenNotice[] = [];
+    for (const n of pending) {
+      const room = cfg.fixedRooms.find((r) => r.id === n.roomId);
+      const webhook = room ? readDiscordWebhook(room) : null;
+      if (!webhook) {
+        logEvent('rede', `aviso do Discord descartado: ${room ? 'o webhook da sala não pôde ser lido' : 'a sala não existe mais'}`);
+        continue; // the room or its webhook was removed here (or cannot be read): nothing to edit with
+      }
+      const info = { host: n.host, roomName: n.roomName, code: n.code, hasAvatar: !!avatar };
+      const result = await editDiscord(webhook, n.messageId, closedEmbed(info, knownDuration ? Date.now() - n.openedAt : null), avatar);
+      if (!result.ok && !result.gone) {
+        keep.push(n);
+        logEvent('rede', `não consegui fechar o aviso no Discord: ${result.message}`);
+      }
+    }
+    saveNotices(keep);
+  });
+}
+
+/** One operation on the list of notices at a time (ending a room and opening another right after must not overwrite each other's changes). */
+let noticeChain: Promise<unknown> = Promise.resolve();
+function inNoticeQueue<T>(job: () => Promise<T>): Promise<T> {
+  const run = noticeChain.then(job, job);
+  noticeChain = run.catch(() => undefined);
+  return run;
 }
 
 /** Keeps the copy of the Cloudflare connection that survives uninstalling (see worker-backup.ts). Failing to write it never blocks connecting. */
@@ -576,7 +673,14 @@ function registerIpc(): void {
       const webhook = parseDiscordWebhook(input.webhook);
       if (!webhook) return { ok: false, message: 'Isso não parece um webhook do Discord. Ele começa com https://discord.com/api/webhooks/ e é copiado nas configurações do canal, em Integrações > Webhooks.' };
       if (!safeStorage.isEncryptionAvailable()) return { ok: false, message: 'O Windows não liberou a criptografia para guardar o webhook com segurança.' };
-      const sent = await sendDiscordEmbed(webhook, { title: 'Teste do Jaca anti Janja', description: `Está funcionando. Quando a sala **${discordText(name, 32)}** abrir, o aviso vai chegar neste canal assim.` });
+      const sent = await postDiscord(webhook, {
+        color: 0xf2b83c,
+        title: 'Teste do Jaca anti Janja',
+        description: `Está funcionando. Quando a sala **${discordText(name, 32)}** abrir, o aviso vai chegar neste canal assim.`,
+        thumbnail: { url: 'attachment://icon.png' },
+        footer: { text: 'Jaca anti Janja', icon_url: 'attachment://icon.png' },
+        timestamp: new Date().toISOString(),
+      });
       if (!sent.ok) return sent;
       webhookEnc = safeStorage.encryptString(webhook).toString('base64');
       message = 'Webhook testado e guardado (criptografado neste PC).';
@@ -593,13 +697,18 @@ function registerIpc(): void {
     const webhook = room ? readDiscordWebhook(room) : null;
     const code = String(info?.code ?? '').replace(/[^A-Za-z0-9@.:\-]/g, '').slice(0, 120);
     if (!room || !webhook || !code) return { ok: true, message: '' }; // nothing to announce
-    const result = await sendDiscordEmbed(webhook, {
-      title: 'Sala aberta',
-      description: `**${discordText(cfg.name, 24) || 'Alguém'}** abriu a sala **${discordText(room.name, 32)}**. Cole o código no app para entrar.`,
-      fields: [{ name: 'Código da sala', value: `\`${code}\`` }],
-    });
+    await closeOpenNotices(true); // a notice of this app that is still open (the room ended some other way) is closed before a new one is posted
+    const avatar = avatarBytes(cfg);
+    const openedAt = Date.now();
+    const noticeInfo = { host: cfg.name, roomName: room.name, code, hasAvatar: !!avatar };
+    const result = await postDiscord(webhook, openedEmbed(noticeInfo, openedAt / 1000), avatar);
     if (!result.ok) logEvent('rede', `aviso no Discord falhou: ${result.message}`);
-    return result;
+    // remembered (also on disk) so the same message can be edited to "Fechada" when the room ends
+    if (result.ok && result.id) {
+      const notice: OpenNotice = { roomId: room.id, messageId: result.id, openedAt, host: cfg.name, roomName: room.name, code };
+      await inNoticeQueue(async () => saveNotices([...loadNotices(), notice]));
+    }
+    return { ok: result.ok, message: result.message };
   });
   // a fixed room gets a new code (the old one, and every favorite made from it, stops leading anywhere)
   ipcMain.handle('room:new-fixed-code', (_e, id: unknown) => {
@@ -617,7 +726,10 @@ function registerIpc(): void {
       }),
     );
   });
-  ipcMain.handle('room:close', () => closeRoom());
+  ipcMain.handle('room:close', async () => {
+    await closeRoom();
+    void closeOpenNotices(true); // the Discord notice of the room that just ended turns into "Fechada" (it does not hold up the window)
+  });
   ipcMain.handle('net:test', () => testConnectivity());
   ipcMain.handle('capture:list', (_e, kind?: string) => listSources(kind));
   ipcMain.handle('audio:start', (_e, sourceId: string | null) =>
@@ -770,6 +882,7 @@ if (!gotLock) {
     createWindow();
     setupDevReload();
     initUpdater(() => win);
+    void closeOpenNotices(false); // notices left open by an app that died: now "Fechada", with the time open as "Desconhecido"
   });
   app.on('window-all-closed', () => app.quit());
   let quitting = false;
@@ -777,6 +890,8 @@ if (!gotLock) {
     if (quitting) return;
     e.preventDefault();
     quitting = true;
-    closeRoom().finally(() => app.quit());
+    // quitting from inside a room also closes its Discord notice, but never keeps the app waiting for more than a few seconds
+    const noticesClosed = Promise.race([closeOpenNotices(true), new Promise<void>((resolve) => setTimeout(resolve, 4000))]);
+    Promise.all([closeRoom(), noticesClosed]).finally(() => app.quit());
   });
 }

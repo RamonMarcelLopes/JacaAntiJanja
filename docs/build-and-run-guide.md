@@ -105,8 +105,10 @@ the mouse during a run. Specs: `home.spec.ts` (first run, name check, text selec
 `room.spec.ts` (room name, join errors, three-dot menu, live profile changes, leave/close) and `share.spec.ts` (real
 screen capture, watching with audio, quality change). `home-extra.spec.ts` covers the two-button home screen, the
 favorites list (filters, three dots) and Settings > Câmera. `cloudflare.spec.ts` and `fixed-rooms.spec.ts` run against a Worker
-started locally (fixed rooms, taking a room back, favorites, the Discord switch; the webhook itself is only validated, never
-called). `camera.spec.ts` shares a fake camera made by Chromium (`--use-fake-device-for-media-stream`) and switches between camera
+started locally (fixed rooms, taking a room back, favorites, the Discord switch). `discord.spec.ts` plays Discord with a tiny local
+server (`e2e/discord.ts`; the app is pointed at it with `JACA_DISCORD_BASE`, which is ignored by the installed app) and checks the
+notice that opens, the same message edited to "Fechada", the recovery after the app dies (the process tree is killed) and a deleted
+webhook. `camera.spec.ts` shares a fake camera made by Chromium (`--use-fake-device-for-media-stream`) and switches between camera
 and screen. They use ports 47851-47854, so they do not clash with a room open on the default port. `pnpm test` still runs the
 fast unit tests (invite code, STUN, signaling server, Discord webhook address, the lists of saved rooms).
 

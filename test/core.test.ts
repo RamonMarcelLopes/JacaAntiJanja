@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { WebSocket } from 'ws';
 import { decodeInvite, encodeCloudInvite, encodeInvite, isValidRoomId, parseInvite, roomIdFromBytes, workerHost, parseWorkerAddress } from '../src/shared/invite';
-import { discordText, parseDiscordWebhook } from '../src/shared/discord';
+import { APP_DOWNLOAD_URL, closedEmbed, discordText, humanDuration, openedEmbed, parseDiscordWebhook } from '../src/shared/discord';
 import { cleanFavorites, cleanFixedRooms } from '../src/shared/rooms';
 import { formatDuration } from '../src/shared/time';
 import { buildStunRequest, classifyVpnInterfaces, isCgnatRange, isPrivateIpv4, natVerdict, parseStunMapped, parseStunResponse } from '../src/main/network';
@@ -471,4 +471,70 @@ test('fixed rooms: valid ids only, one entry per id, clean names, and the webhoo
 test('fixed rooms: no more than 10', () => {
   const many = Array.from({ length: 15 }, (_, i) => ({ id: roomIdFromBytes(new Uint8Array([7, 7, 7, 7, 7, 7, i])), name: `Sala ${i}` }));
   assert.equal(cleanFixedRooms(many).length, 10);
+});
+
+// ---------------------------------------------------------------- the Discord notice: open, then the same message closed
+
+test('time open reads naturally in Portuguese', () => {
+  assert.equal(humanDuration(0), 'menos de 1 minuto');
+  assert.equal(humanDuration(59_000), 'menos de 1 minuto');
+  assert.equal(humanDuration(-5), 'menos de 1 minuto');
+  assert.equal(humanDuration(Number.NaN), 'menos de 1 minuto');
+  assert.equal(humanDuration(60_000), '1 minuto');
+  assert.equal(humanDuration(45 * 60_000), '45 minutos');
+  assert.equal(humanDuration(60 * 60_000), '1 hora');
+  assert.equal(humanDuration(125 * 60_000), '2 horas e 5 minutos');
+  assert.equal(humanDuration(61 * 60_000), '1 hora e 1 minuto');
+  assert.equal(humanDuration(24 * 60 * 60_000), '1 dia');
+  assert.equal(humanDuration((27 * 60 + 40) * 60_000), '1 dia e 3 horas');
+  assert.equal(humanDuration(50 * 60 * 60_000), '2 dias e 2 horas');
+});
+
+const fieldOf = (embed: Record<string, unknown>, name: string) => (embed.fields as Array<{ name: string; value: string; inline?: boolean }>).find((f) => f.name === name);
+
+test('Discord notice (room opened): green, host photo, room name, code, status and a counter that Discord keeps updating', () => {
+  const info = { host: 'Ramon', roomName: 'Sala do Teste', code: 'K7QM2-XRA9T@ramonlopesdev', hasAvatar: true };
+  const e = openedEmbed(info, 1_760_000_000) as Record<string, any>;
+  assert.equal(e.color, 0x9ad04d);
+  assert.equal(e.author.name, 'Ramon abriu uma sala');
+  assert.equal(e.author.icon_url, 'attachment://host.jpg');
+  assert.equal(e.title, 'Sala do Teste');
+  assert.equal(e.url, APP_DOWNLOAD_URL);
+  assert.equal(e.thumbnail.url, 'attachment://icon.png');
+  assert.equal(e.footer.text, 'Jaca anti Janja');
+  assert.equal(e.timestamp, new Date(1_760_000_000 * 1000).toISOString());
+  assert.deepEqual((e.fields as Array<{ name: string }>).map((f) => f.name), ['Código da sala', 'Host', 'Tipo', 'Status', 'Tempo aberta']);
+  assert.ok(fieldOf(e, 'Código da sala')!.value.includes('K7QM2-XRA9T@ramonlopesdev'));
+  assert.equal(fieldOf(e, 'Status')!.value, 'Aberta');
+  assert.equal(fieldOf(e, 'Tempo aberta')!.value, '<t:1760000000:R>'); // Discord shows "há 3 minutos" and counts by itself
+  assert.equal(fieldOf(e, 'Tipo')!.value, 'Sala fixa');
+  // without a photo there is no author icon (the message would point to an attachment that does not exist)
+  assert.equal((openedEmbed({ ...info, hasAvatar: false }, 1_760_000_000) as Record<string, any>).author.icon_url, undefined);
+});
+
+test('Discord notice (room closed): same message turned grey, status "Fechada", how long it was open or "Desconhecido"', () => {
+  const info = { host: 'Ramon', roomName: 'Sala do Teste', code: 'K7QM2-XRA9T@ramonlopesdev', hasAvatar: false };
+  const e = closedEmbed(info, 125 * 60_000, 1_760_000_000_000) as Record<string, any>;
+  assert.equal(e.color, 0x6b7160);
+  assert.equal(e.author.name, 'Ramon encerrou a sala');
+  assert.equal(e.title, 'Sala do Teste');
+  assert.equal(e.url, undefined); // the closed one no longer invites anybody to download the app
+  assert.deepEqual((e.fields as Array<{ name: string }>).map((f) => f.name), ['Código da sala', 'Host', 'Tipo', 'Status', 'Ficou aberta por']);
+  assert.equal(fieldOf(e, 'Status')!.value, 'Fechada');
+  assert.equal(fieldOf(e, 'Ficou aberta por')!.value, '2 horas e 5 minutos');
+  assert.equal(e.timestamp, new Date(1_760_000_000_000).toISOString());
+  // the app died: the time is not known
+  assert.equal(fieldOf(closedEmbed(info, null), 'Ficou aberta por')!.value, 'Desconhecido');
+});
+
+test('Discord notice: names typed by a person cannot break the message or ping anybody', () => {
+  const evil = { host: '@everyone *Ana*\nlinha', roomName: '[sala](http://x) @here', code: 'AB`CD', hasAvatar: false };
+  const e = openedEmbed(evil, 1_760_000_000) as Record<string, any>;
+  assert.equal(e.author.name, '@everyone *Ana* linha abriu uma sala'); // the author line reads no markdown: plain, on one line
+  const BS = String.fromCharCode(92);
+  assert.equal(e.title, `${BS}[sala${BS}]${BS}(http${BS}://x${BS}) ${BS}@here`); // the title does: escaped
+  assert.equal(fieldOf(e, 'Host')!.value, `${BS}@everyone ${BS}*Ana${BS}* linha`);
+  assert.ok(!fieldOf(e, 'Código da sala')!.value.slice(3, -3).includes('`')); // a backtick in the code cannot close the code block
+  assert.equal((openedEmbed({ host: '', roomName: '', code: 'X', hasAvatar: false }, 1) as Record<string, any>).title, 'Jaca room'); // nameless room
+  assert.equal((openedEmbed({ host: '', roomName: 'S', code: 'X', hasAvatar: false }, 1) as Record<string, any>).author.name, 'Alguém abriu uma sala');
 });

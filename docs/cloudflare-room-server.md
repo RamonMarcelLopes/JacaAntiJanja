@@ -84,8 +84,14 @@ home screen is open; a notice appears when a closed favorite opens). The same qu
 reveals what joining would reveal. Workers older than this version do not know the question: the state is then shown as *Sem resposta*.
 
 **Discord notice (per fixed room).** In *Nova sala fixa* and in *Editar sala* the switch *Avisar no Discord* shows a field for the webhook
-of a channel (channel settings > Integrations > Webhooks). When that room opens, the app posts an embed in that channel: who opened it, the
-room name, the room code and the app icon. Each fixed room has its own webhook (or none). The address is tested when saved (a test
+of a channel (channel settings > Integrations > Webhooks). When that room opens, the app posts an embed in that channel (green): who opened it
+with their photo, the room name, the room code, *Status: Aberta* and a counter ("Tempo aberta", which Discord keeps updating itself). When
+the room ends, **the same message is edited**: grey, *Status: Fechada* and *Ficou aberta por* with how long it was open. Opening the room again
+posts a new message, so the channel keeps one message per time the room opened. If the app dies with the room open (crash, killed process,
+power loss) the notice stays "Aberta" until the next start, when the app edits it to "Fechada" and writes *Desconhecido* as the time open (the
+pending notices are kept in `discord-notices.json` in the app's data folder; one that cannot be reached because there is no internet is tried
+again at the next start, for up to a week). If somebody deleted the webhook or the message in Discord, the app just ignores that and goes on.
+Each fixed room has its own webhook (or none). The address is tested when saved (a test
 message is sent), stored encrypted with Windows (safeStorage) inside that room, and never shown again; only
 `https://discord.com/api/webhooks/...` addresses (also `discordapp.com`, `canary.`, `ptb.`) are accepted, names are escaped and nobody is
 pinged (`allowed_mentions` is empty). The code is visible to everybody who sees the channel, which is the point of the notice: use a channel
