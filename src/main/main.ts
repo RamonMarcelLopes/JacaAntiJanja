@@ -5,8 +5,10 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { encodeCloudInvite, encodeInvite, isValidSubdomain, parseWorkerAddress, roomIdFromBytes, workerHost } from '../shared/invite';
-import { AppConfig, CaptureSource, ConnectivityResult, DEFAULT_PORT, MAX_ROOM_NAME, RoomInfo, SOUND_NAMES } from '../shared/protocol';
+import { discordText, parseDiscordWebhook } from '../shared/discord';
+import { encodeCloudInvite, encodeInvite, isValidSubdomain, parseInvite, parseWorkerAddress, roomIdFromBytes, workerHost } from '../shared/invite';
+import { cleanFavorites, cleanFixedRooms } from '../shared/rooms';
+import { AppConfig, CaptureSource, ConnectivityResult, DEFAULT_PORT, DiscordResult, FavoriteRoom, FixedRoom, FixedRoomInput, FixedRoomSaveResult, MAX_FAVORITE_ROOMS, MAX_FIXED_ROOMS, MAX_ROOM_NAME, RoomInfo, RoomStatus, SOUND_NAMES } from '../shared/protocol';
 import { startAudio, stopAudio } from './audio';
 import { deleteWorkerBackup, loadWorkerBackup, saveWorkerBackup, updateWorkerBackupMode } from './worker-backup';
 import { checkForUpdates, currentUpdateState, initUpdater, installUpdate } from './updater';
@@ -25,10 +27,15 @@ const DEFAULT_CONFIG: AppConfig = {
   connectionMode: 'direct',
   workerSubdomain: '',
   workerOwnerKeyEnc: '',
+  fixedRooms: [],
+  favoriteRooms: [],
   codec: 'auto',
   resolution: '1080p',
   fps: 30,
   mode: 'motion',
+  cameraResolution: '720p',
+  cameraFps: 30,
+  cameraMode: 'motion',
 };
 
 const ALLOWED_PERMISSIONS = new Set(['fullscreen', 'display-capture']);
@@ -101,6 +108,11 @@ function saveConfig(patch: Partial<AppConfig>): AppConfig {
   const subdomain = String(next.workerSubdomain ?? '').trim().toLowerCase();
   next.workerSubdomain = isValidSubdomain(subdomain) ? subdomain : '';
   next.workerOwnerKeyEnc = typeof next.workerOwnerKeyEnc === 'string' ? next.workerOwnerKeyEnc : '';
+  next.fixedRooms = cleanFixedRooms(next.fixedRooms);
+  next.favoriteRooms = cleanFavorites(next.favoriteRooms);
+  next.cameraResolution = next.cameraResolution === '1080p' || next.cameraResolution === '1440p' ? next.cameraResolution : '720p';
+  next.cameraFps = next.cameraFps === 60 ? 60 : 30;
+  next.cameraMode = next.cameraMode === 'detail' ? 'detail' : 'motion';
   const port = Number(next.port);
   next.port = Number.isInteger(port) && port >= 1024 && port <= 65535 ? port : DEFAULT_PORT;
   fs.mkdirSync(path.dirname(configPath()), { recursive: true });
@@ -126,7 +138,44 @@ function cleanRoomName(raw: unknown, hostName: string): string {
 
 /** What the UI may see of the config: the encrypted owner key is replaced by a flag, so the UI can never read it. */
 function publicConfig(cfg: AppConfig): AppConfig {
-  return { ...cfg, workerOwnerKeyEnc: cfg.workerOwnerKeyEnc ? 'set' : '' };
+  return {
+    ...cfg,
+    workerOwnerKeyEnc: cfg.workerOwnerKeyEnc ? 'set' : '',
+    fixedRooms: cfg.fixedRooms.map((r) => ({ ...r, discordWebhookEnc: r.discordWebhookEnc ? 'set' : '' })), // each room's webhook stays in this process
+  };
+}
+
+// ---------------------------------------------------------------- Discord: "the room opened" notice through a channel webhook
+
+function readDiscordWebhook(room: FixedRoom): string | null {
+  if (!room.discordWebhookEnc) return null;
+  try {
+    return parseDiscordWebhook(safeStorage.decryptString(Buffer.from(room.discordWebhookEnc, 'base64')));
+  } catch {
+    return null;
+  }
+}
+
+/** Sends one embed with the app icon attached. Nobody is ever pinged (allowed_mentions is empty). Never logs the address. */
+async function sendDiscordEmbed(webhook: string, embed: Record<string, unknown>): Promise<DiscordResult> {
+  try {
+    const icon = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'icon.png'));
+    const payload = {
+      username: 'Jaca anti Janja',
+      allowed_mentions: { parse: [] },
+      embeds: [{ color: 0xf2b83c, thumbnail: { url: 'attachment://icon.png' }, footer: { text: 'Jaca anti Janja' }, timestamp: new Date().toISOString(), ...embed }],
+    };
+    const form = new FormData();
+    form.append('payload_json', JSON.stringify(payload));
+    form.append('files[0]', new Blob([icon], { type: 'image/png' }), 'icon.png');
+    const res = await fetch(webhook, { method: 'POST', body: form, signal: AbortSignal.timeout(10_000) });
+    if (res.ok) return { ok: true, message: '' };
+    if (res.status === 404 || res.status === 401) return { ok: false, message: 'O Discord não aceitou esse webhook (ele foi apagado ou a URL está incompleta).' };
+    if (res.status === 429) return { ok: false, message: 'O Discord pediu para esperar um pouco. Tente de novo em instantes.' };
+    return { ok: false, message: `O Discord respondeu com erro ${res.status}.` };
+  } catch {
+    return { ok: false, message: 'Não consegui falar com o Discord. Confira a internet.' };
+  }
 }
 
 /** Keeps the copy of the Cloudflare connection that survives uninstalling (see worker-backup.ts). Failing to write it never blocks connecting. */
@@ -236,13 +285,50 @@ async function claimWorker(httpBase: string, key: string): Promise<{ ok: boolean
   }
 }
 
-async function createCloudRoom(cfg: AppConfig): Promise<RoomInfo> {
+/** Asks a Worker whether a room is open. `unknown` when it cannot be asked or the Worker is an older one without this question. */
+async function fetchRoomStatus(subdomain: string, roomId: string): Promise<Omit<RoomStatus, 'code'>> {
+  const base = workerBase(subdomain).http;
+  try {
+    await ensureNameResolution(base);
+    const res = await fetch(`${base}/api/room/${roomId}`, { signal: AbortSignal.timeout(6000) });
+    if (!res.ok) return { state: 'unknown' };
+    const body = (await res.json()) as { open?: unknown; name?: unknown; hostName?: unknown; count?: unknown };
+    if (typeof body.open !== 'boolean') return { state: 'unknown' }; // an older Worker answers its plain text page
+    if (!body.open) return { state: 'closed' };
+    return {
+      state: 'open',
+      name: typeof body.name === 'string' ? body.name.slice(0, MAX_ROOM_NAME) : undefined,
+      hostName: typeof body.hostName === 'string' ? body.hostName.slice(0, 24) : undefined,
+      count: typeof body.count === 'number' ? body.count : undefined,
+    };
+  } catch {
+    return { state: 'unknown' };
+  }
+}
+
+/** The message the window recognizes: the fixed room still looks open (the app closed without ending it), so it asks what to do. */
+const FIXED_ROOM_BUSY = 'FIXED_ROOM_BUSY';
+
+async function createCloudRoom(cfg: AppConfig, fixedId: string | null, takeover: boolean): Promise<RoomInfo> {
   const key = readOwnerKey(cfg);
   if (!cfg.workerSubdomain || !key) throw new Error('Configure o seu Worker em Configurações > Rede (Cloudflare) antes de criar uma sala neste modo.');
   const base = workerBase(cfg.workerSubdomain);
   const check = await checkWorker(base.http, key);
   if (!check.ok) throw new Error(check.message);
-  const roomId = roomIdFromBytes(randomBytes(7));
+  let roomId: string;
+  let takeoverNow = false; // ask the Worker to hand the room id back to its owner
+  if (fixedId) {
+    // a fixed room: the same id every time, generated when it was added and kept in the config
+    if (!cfg.fixedRooms.some((r) => r.id === fixedId)) throw new Error('Essa sala fixa não existe mais.');
+    roomId = fixedId;
+    const status = await fetchRoomStatus(cfg.workerSubdomain, roomId);
+    if (status.state === 'open' && !takeover) throw new Error(FIXED_ROOM_BUSY);
+    // open and the person chose to reopen it, or "closed" while a leftover of the old room is still there: the id is taken back.
+    // When the Worker could not say (unknown), nothing is taken: that could end a room that really is in use somewhere else.
+    takeoverNow = status.state === 'closed' || (status.state === 'open' && takeover);
+  } else {
+    roomId = roomIdFromBytes(randomBytes(7));
+  }
   return {
     code: encodeCloudInvite(roomId, cfg.workerSubdomain),
     ip: workerHost(cfg.workerSubdomain),
@@ -251,14 +337,14 @@ async function createCloudRoom(cfg: AppConfig): Promise<RoomInfo> {
     upnp: false,
     warnings: [],
     mode: 'cloudflare',
-    wsUrl: `${base.ws}/ws/${roomId}?create=1&key=${encodeURIComponent(key)}`,
+    wsUrl: `${base.ws}/ws/${roomId}?create=1&key=${encodeURIComponent(key)}${takeoverNow ? '&takeover=1' : ''}`,
   };
 }
 
-async function createRoom(requestedName: unknown): Promise<RoomInfo> {
+async function createRoom(requestedName: unknown, fixedId: unknown, takeover: unknown): Promise<RoomInfo> {
   await closeRoom();
   const cfg = loadConfig();
-  if (cfg.connectionMode === 'cloudflare') return createCloudRoom(cfg);
+  if (cfg.connectionMode === 'cloudflare') return createCloudRoom(cfg, typeof fixedId === 'string' && fixedId ? fixedId : null, takeover === true);
   const warnings: string[] = [];
   const srv = new SignalingServer(cfg.port, cleanRoomName(requestedName, cfg.name));
   try {
@@ -354,6 +440,11 @@ function registerIpc(): void {
   // the Worker address and owner key can only change through worker:save / worker:clear (which check them first)
   ipcMain.handle('config:set', (_e, patch: Partial<AppConfig>) => {
     const { workerSubdomain: _s, workerOwnerKeyEnc: _k, ...allowed } = patch ?? {};
+    if (Array.isArray(allowed.fixedRooms)) {
+      // the window only knows 'set' / '' for a room's webhook: whatever it sends back, each room keeps the address it already has
+      const current = loadConfig().fixedRooms;
+      allowed.fixedRooms = allowed.fixedRooms.map((r) => ({ id: r.id, name: r.name, discordWebhookEnc: current.find((c) => c.id === r.id)?.discordWebhookEnc ?? '' }));
+    }
     const saved = saveConfig(allowed);
     if (allowed.connectionMode) updateWorkerBackupMode(saved.connectionMode); // the saved copy remembers which mode was in use
     return publicConfig(saved);
@@ -466,7 +557,66 @@ function registerIpc(): void {
     return detectVpnAddresses();
   });
   ipcMain.handle('net:nat-test', () => natMappingTest());
-  ipcMain.handle('room:create', (_e, roomName: string) => createRoom(roomName));
+  ipcMain.handle('room:create', (_e, roomName: string, fixedId?: string, takeover?: boolean) => createRoom(roomName, fixedId, takeover));
+  // Creates (no id) or changes (with id) a fixed room; the id is generated here, never by the window. A new Discord webhook is checked and
+  // tested (a message is sent to the channel) BEFORE anything is kept; it is stored encrypted inside that room and the window never gets it back.
+  ipcMain.handle('fixed:save', async (_e, input: FixedRoomInput): Promise<FixedRoomSaveResult> => {
+    const cfg = loadConfig();
+    const name = String(input?.name ?? '').replace(/\s+/g, ' ').trim().slice(0, MAX_ROOM_NAME);
+    if (!name) return { ok: false, message: 'Dê um nome para a sala.' };
+    const existing = typeof input?.id === 'string' ? cfg.fixedRooms.find((r) => r.id === input.id) : undefined;
+    if (input?.id && !existing) return { ok: false, message: 'Essa sala fixa não existe mais.' };
+    if (!existing && cfg.fixedRooms.length >= MAX_FIXED_ROOMS) return { ok: false, message: `O limite é de ${MAX_FIXED_ROOMS} salas fixas. Apague uma para criar outra.` };
+    if (cfg.fixedRooms.some((r) => r.id !== existing?.id && r.name.toLowerCase() === name.toLowerCase())) return { ok: false, message: 'Você já tem uma sala fixa com esse nome.' };
+    let webhookEnc = existing?.discordWebhookEnc ?? '';
+    let message = '';
+    if (input.webhook === null) {
+      webhookEnc = '';
+    } else if (typeof input.webhook === 'string' && input.webhook.trim()) {
+      const webhook = parseDiscordWebhook(input.webhook);
+      if (!webhook) return { ok: false, message: 'Isso não parece um webhook do Discord. Ele começa com https://discord.com/api/webhooks/ e é copiado nas configurações do canal, em Integrações > Webhooks.' };
+      if (!safeStorage.isEncryptionAvailable()) return { ok: false, message: 'O Windows não liberou a criptografia para guardar o webhook com segurança.' };
+      const sent = await sendDiscordEmbed(webhook, { title: 'Teste do Jaca anti Janja', description: `Está funcionando. Quando a sala **${discordText(name, 32)}** abrir, o aviso vai chegar neste canal assim.` });
+      if (!sent.ok) return sent;
+      webhookEnc = safeStorage.encryptString(webhook).toString('base64');
+      message = 'Webhook testado e guardado (criptografado neste PC).';
+    }
+    const id = existing?.id ?? roomIdFromBytes(randomBytes(7));
+    const room: FixedRoom = { id, name, discordWebhookEnc: webhookEnc };
+    saveConfig({ fixedRooms: existing ? cfg.fixedRooms.map((r) => (r.id === id ? room : r)) : [...cfg.fixedRooms, room] });
+    return { ok: true, id, message };
+  });
+  // called by the window once a fixed room is really open: posts the notice in THAT room's channel (rooms without a webhook post nothing)
+  ipcMain.handle('discord:notify', async (_e, info: { fixedId?: unknown; code?: unknown }): Promise<DiscordResult> => {
+    const cfg = loadConfig();
+    const room = cfg.fixedRooms.find((r) => r.id === info?.fixedId);
+    const webhook = room ? readDiscordWebhook(room) : null;
+    const code = String(info?.code ?? '').replace(/[^A-Za-z0-9@.:\-]/g, '').slice(0, 120);
+    if (!room || !webhook || !code) return { ok: true, message: '' }; // nothing to announce
+    const result = await sendDiscordEmbed(webhook, {
+      title: 'Sala aberta',
+      description: `**${discordText(cfg.name, 24) || 'Alguém'}** abriu a sala **${discordText(room.name, 32)}**. Cole o código no app para entrar.`,
+      fields: [{ name: 'Código da sala', value: `\`${code}\`` }],
+    });
+    if (!result.ok) logEvent('rede', `aviso no Discord falhou: ${result.message}`);
+    return result;
+  });
+  // a fixed room gets a new code (the old one, and every favorite made from it, stops leading anywhere)
+  ipcMain.handle('room:new-fixed-code', (_e, id: unknown) => {
+    const cfg = loadConfig();
+    return publicConfig(saveConfig({ fixedRooms: cfg.fixedRooms.map((r) => (r.id === id ? { ...r, id: roomIdFromBytes(randomBytes(7)) } : r)) }));
+  });
+  // asks each favorite's Worker whether its room is open (at most MAX_FAVORITE_ROOMS short requests)
+  ipcMain.handle('rooms:status', async (_e, codes: unknown): Promise<RoomStatus[]> => {
+    const list = Array.isArray(codes) ? codes.slice(0, MAX_FAVORITE_ROOMS) : [];
+    return Promise.all(
+      list.map(async (raw): Promise<RoomStatus> => {
+        const invite = parseInvite(String(raw ?? ''));
+        if (!invite || invite.kind !== 'cloud') return { code: String(raw ?? ''), state: 'unknown' };
+        return { code: encodeCloudInvite(invite.roomId, invite.subdomain), ...(await fetchRoomStatus(invite.subdomain, invite.roomId)) };
+      }),
+    );
+  });
   ipcMain.handle('room:close', () => closeRoom());
   ipcMain.handle('net:test', () => testConnectivity());
   ipcMain.handle('capture:list', (_e, kind?: string) => listSources(kind));
@@ -508,9 +658,13 @@ function setupSession(): void {
   // requests list 'audio'/'video' and are denied.
   session.defaultSession.setPermissionRequestHandler((_wc, permission, cb, details) => {
     const types = (details as { mediaTypes?: string[] }).mediaTypes ?? [];
-    cb(ALLOWED_PERMISSIONS.has(permission) || (permission === 'media' && types.length === 0));
+    // a camera (video only) is allowed for sharing it in the room; the microphone is never
+    const cameraOnly = permission === 'media' && types.length === 1 && types[0] === 'video';
+    cb(ALLOWED_PERMISSIONS.has(permission) || (permission === 'media' && types.length === 0) || cameraOnly);
   });
-  session.defaultSession.setPermissionCheckHandler((_wc, permission) => ALLOWED_PERMISSIONS.has(permission));
+  session.defaultSession.setPermissionCheckHandler((_wc, permission, _origin, details) => {
+    return ALLOWED_PERMISSIONS.has(permission) || (permission === 'media' && (details as { mediaType?: string }).mediaType === 'video');
+  });
 
   session.defaultSession.setDisplayMediaRequestHandler(async (req, callback) => {
     try {

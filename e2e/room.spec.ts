@@ -1,5 +1,5 @@
 import { expect, Page, test } from '@playwright/test';
-import { createRoom, joinRoom, launchApp, PNG_1X1, sounds, TestApp } from './app';
+import { createRoom, enterCode, joinRoom, launchApp, PNG_1X1, smallDialog, sounds, TestApp } from './app';
 
 let host: TestApp;
 let guest: TestApp;
@@ -23,10 +23,15 @@ test('the chosen room name is the title for host and guest', async () => {
   await expect(guest.page.getByRole('heading', { name: 'Noite de filmes' })).toBeVisible();
 });
 
-test('without a room name the title is "Sala de <host>"', async () => {
+test('the room is called "Jaca room" when nobody types another name, also when the field is emptied', async () => {
   const code = await createRoom(host.page);
   await joinRoom(guest.page, code);
-  await expect(guest.page.getByRole('heading', { name: 'Sala de Ana' })).toBeVisible();
+  await expect(guest.page.getByRole('heading', { name: 'Jaca room' })).toBeVisible();
+  await host.page.getByRole('button', { name: 'Encerrar sala' }).click();
+  await expect(host.page.getByRole('heading', { name: 'Seu perfil' })).toBeVisible({ timeout: 15_000 });
+
+  await createRoom(host.page, '   '); // only blanks: the suggested name is used
+  await expect(host.page.getByRole('heading', { name: 'Jaca room' })).toBeVisible();
 });
 
 test('both people see each other in the participant list', async () => {
@@ -39,31 +44,31 @@ test('both people see each other in the participant list', async () => {
 test('invalid and wrong invite codes show clear errors', async () => {
   const code = await createRoom(host.page);
 
-  await guest.page.getByPlaceholder('XXXX-XXXX-XXXX-XXXX').fill('NAO-E-UM-CODIGO');
-  await guest.page.getByRole('button', { name: 'Entrar' }).click();
+  await enterCode(guest.page, 'NAO-E-UM-CODIGO');
   await expect(guest.page.locator('.toast.error').last()).toContainText('Código de convite inválido');
+  await expect(smallDialog(guest.page)).toBeVisible(); // the dialog stays open so the code can be fixed
 
   // flip the last character: same address, different token
   const flipped = code.slice(0, -1) + (code.endsWith('A') ? 'B' : 'A');
-  await guest.page.getByPlaceholder('XXXX-XXXX-XXXX-XXXX').fill(flipped);
-  await guest.page.getByRole('button', { name: 'Entrar' }).click();
+  await enterCode(guest.page, flipped);
   await expect(guest.page.locator('.toast.error').last()).toContainText('Código de convite incorreto');
 });
 
-test('only your own card has the three-dot menu, and it opens "Editar perfil"', async () => {
+test('every card has the three-dot menu: yours offers "Editar perfil", everybody\'s "Ver perfil"', async () => {
   const code = await createRoom(host.page);
   await joinRoom(guest.page, code);
 
-  await expect(guest.page.locator('.kebab')).toHaveCount(1);
-  await expect(guest.page.locator('.peer-row .peer-name')).toHaveText('Bia (você)');
+  await expect(guest.page.locator('.kebab')).toHaveCount(2);
+  await expect(guest.page.locator('.peer-row .peer-name')).toHaveText(['Bia (você)', 'Ana']);
 
   // the dots sit inside the card's border and only show while the pointer is over the card
-  const kebab = guest.page.locator('.kebab');
+  const ownRow = guest.page.locator('.peer-row', { hasText: 'Bia (você)' });
+  const kebab = ownRow.locator('.kebab');
   await guest.page.mouse.move(2, 2);
   await expect(kebab).toHaveCSS('opacity', '0');
-  await guest.page.locator('.peer-row').hover();
+  await ownRow.hover();
   await expect(kebab).toHaveCSS('opacity', '1');
-  const card = (await guest.page.locator('.peer-row .peer').boundingBox())!;
+  const card = (await ownRow.locator('.peer').boundingBox())!;
   const dots = (await kebab.boundingBox())!;
   expect(dots.x).toBeGreaterThan(card.x);
   expect(dots.x + dots.width).toBeLessThanOrEqual(card.x + card.width);
@@ -72,14 +77,48 @@ test('only your own card has the three-dot menu, and it opens "Editar perfil"', 
   await guest.page.mouse.move(2, 2);
   await expect(guest.page.getByRole('button', { name: 'Editar perfil' })).toHaveCount(0); // no longer in the top bar
 
-  await guest.page.getByRole('button', { name: 'Opções do perfil' }).click();
+  await guest.page.getByRole('button', { name: 'Opções do perfil de Bia' }).click();
   await expect(guest.page.getByRole('menuitem', { name: 'Editar perfil' })).toBeVisible();
+  await expect(guest.page.getByRole('menuitem', { name: 'Ver perfil' })).toBeVisible();
   await guest.page.keyboard.press('Escape');
   await expect(guest.page.getByRole('menuitem')).toHaveCount(0);
 
-  await guest.page.getByRole('button', { name: 'Opções do perfil' }).click();
+  await guest.page.getByRole('button', { name: 'Opções do perfil de Bia' }).click();
   await guest.page.getByRole('menuitem', { name: 'Editar perfil' }).click();
   await expect(guest.page.getByRole('heading', { name: 'Editar perfil' })).toBeVisible();
+});
+
+test('"Ver perfil" opens the profile of any participant: a big photo and the name, closed with the X', async () => {
+  const code = await createRoom(host.page);
+  await joinRoom(guest.page, code);
+
+  // somebody else's card: only "Ver perfil"
+  await guest.page.getByRole('button', { name: 'Opções do perfil de Ana' }).click();
+  await expect(guest.page.getByRole('menuitem')).toHaveText(['Ver perfil']);
+  await guest.page.getByRole('menuitem', { name: 'Ver perfil' }).click();
+
+  const view = guest.page.locator('.profile-view');
+  await expect(view).toBeVisible();
+  await expect(view.getByRole('heading', { name: 'Ana' })).toBeVisible();
+  const photo = (await view.locator('.avatar').boundingBox())!;
+  expect(photo.width).toBeGreaterThanOrEqual(200); // much bigger than the 44 px of the list
+  expect(photo.height).toBeGreaterThanOrEqual(200);
+
+  // closes with the X in the top right corner of the modal (there is no "Fechar" button any more)
+  await expect(view.getByRole('button', { name: 'Fechar' })).toHaveCount(1);
+  const box = (await view.boundingBox())!;
+  const x = (await view.getByRole('button', { name: 'Fechar' }).boundingBox())!;
+  expect(x.x + x.width).toBeGreaterThan(box.x + box.width - 60);
+  expect(x.y).toBeLessThan(box.y + 60);
+  await view.getByRole('button', { name: 'Fechar' }).click();
+  await expect(guest.page.locator('.profile-view')).toHaveCount(0);
+
+  // your own card: "Ver perfil" too, with "(você)"
+  await guest.page.getByRole('button', { name: 'Opções do perfil de Bia' }).click();
+  await guest.page.getByRole('menuitem', { name: 'Ver perfil' }).click();
+  await expect(guest.page.locator('.profile-view').getByRole('heading', { name: 'Bia (você)' })).toBeVisible();
+  await guest.page.keyboard.press('Escape');
+  await expect(guest.page.locator('.profile-view')).toHaveCount(0);
 });
 
 test('profile changes made inside the room reach the others immediately', async () => {
@@ -88,7 +127,7 @@ test('profile changes made inside the room reach the others immediately', async 
   const biaOnHost = host.page.locator('.peer', { hasText: 'Bia' });
   await expect(biaOnHost.locator('img')).toHaveCount(0);
 
-  await guest.page.getByRole('button', { name: 'Opções do perfil' }).click();
+  await guest.page.getByRole('button', { name: 'Opções do perfil de Bia' }).click();
   await guest.page.getByRole('menuitem', { name: 'Editar perfil' }).click();
   const dialog = guest.page.locator('.profile-dialog');
 
@@ -174,15 +213,14 @@ test('everyone in the room sees the invite code and can copy it, not only the ho
 
 test('a guest who typed the code in lowercase still sees the canonical code in the header', async () => {
   const code = await createRoom(host.page);
-  await guest.page.getByPlaceholder('XXXX-XXXX-XXXX-XXXX').fill(code.toLowerCase().replace(/-/g, ' '));
-  await guest.page.getByRole('button', { name: 'Entrar' }).click();
+  await enterCode(guest.page, code.toLowerCase().replace(/-/g, ' '));
   await expect(guest.page.getByRole('heading', { name: 'Participantes' })).toBeVisible({ timeout: 15_000 });
   await expect(guest.page.locator('.code-chip code')).toHaveText(code);
 });
 
-test('the share dialog has Telas and Janelas tabs that swipe, a fixed size, and no worst-case upload text', async () => {
+test('the share dialog has Telas, Janelas and Câmeras tabs that swipe, a fixed size, and no worst-case upload text', async () => {
   await createRoom(host.page);
-  await host.page.getByRole('button', { name: 'Compartilhar tela' }).click();
+  await host.page.getByRole('button', { name: 'Compartilhar', exact: true }).click();
   const dialog = host.page.locator('.dialog');
   const visibleSources = dialog.locator('.source-panel:not([inert]) .source');
   const size = async () => {
@@ -190,25 +228,25 @@ test('the share dialog has Telas and Janelas tabs that swipe, a fixed size, and 
     return `${Math.round(b.width)}x${Math.round(b.height)}`;
   };
 
-  await expect(dialog.getByRole('tab')).toHaveText(['Telas', 'Janelas']);
+  await expect(dialog.getByRole('tab')).toHaveText(['Telas', 'Janelas', 'Câmeras']);
   await expect(dialog.getByText(/Pior caso/)).toHaveCount(0);
   const fixedSize = await size();
 
   // Telas first: screens only, named in Portuguese
   await expect(dialog.getByRole('tab', { name: 'Telas' })).toHaveAttribute('aria-selected', 'true');
   await expect(visibleSources.first()).toContainText(/^Tela \d+$/);
-  await expect(dialog.locator('.seg')).toHaveAttribute('data-kind', 'screens');
+  await expect(dialog.locator('.seg')).toHaveAttribute('data-pos', '0');
   await expect(dialog.locator('.source-track')).toHaveCSS('transform', /^(none|matrix\(1, 0, 0, 1, 0, 0\))$/); // not moved
 
   // Janelas: the highlight and the lists swipe; the open windows include the app's own window; the selection moves to the visible tab
   await dialog.getByRole('tab', { name: 'Janelas' }).click();
   await expect(dialog.getByRole('tab', { name: 'Janelas' })).toHaveAttribute('aria-selected', 'true');
-  await expect(dialog.locator('.seg')).toHaveAttribute('data-kind', 'windows');
+  await expect(dialog.locator('.seg')).toHaveAttribute('data-pos', '1');
   await expect(dialog.locator('.source-track')).toHaveCSS('transform', /^matrix\(1, 0, 0, 1, -\d/); // moved sideways to the left (after the swipe finishes)
   await expect(visibleSources.first()).toBeVisible();
   await expect(dialog.locator('.source.selected')).toHaveCount(1);
   await expect(dialog.getByRole('button', { name: 'Compartilhar', exact: true })).toBeEnabled();
-  await expect(dialog.locator('.source-panel[inert]')).toHaveCount(1); // the hidden list cannot be tabbed into
+  await expect(dialog.locator('.source-panel[inert]')).toHaveCount(2); // the hidden lists cannot be tabbed into
 
   // the modal never changes size when switching tabs; the lists scroll inside it
   expect(await size()).toBe(fixedSize);
@@ -218,14 +256,14 @@ test('the share dialog has Telas and Janelas tabs that swipe, a fixed size, and 
   await dialog.getByRole('tab', { name: 'Janelas' }).focus();
   await host.page.keyboard.press('ArrowLeft');
   await expect(dialog.getByRole('tab', { name: 'Telas' })).toHaveAttribute('aria-selected', 'true');
-  await expect(dialog.locator('.seg')).toHaveAttribute('data-kind', 'screens');
+  await expect(dialog.locator('.seg')).toHaveAttribute('data-pos', '0');
 });
 
 test('modals close when you click outside them or press Esc, but not when you click inside', async () => {
   await createRoom(host.page);
 
   // share dialog
-  await host.page.getByRole('button', { name: 'Compartilhar tela' }).click();
+  await host.page.getByRole('button', { name: 'Compartilhar', exact: true }).click();
   const dialog = host.page.locator('.dialog');
   await expect(dialog).toBeVisible();
   await dialog.locator('h2').click(); // inside: stays open
@@ -234,13 +272,13 @@ test('modals close when you click outside them or press Esc, but not when you cl
   await expect(host.page.locator('.overlay')).toHaveCount(0); // gone once the exit animation finishes
 
   // Esc closes it too
-  await host.page.getByRole('button', { name: 'Compartilhar tela' }).click();
+  await host.page.getByRole('button', { name: 'Compartilhar', exact: true }).click();
   await expect(dialog).toBeVisible();
   await host.page.keyboard.press('Escape');
   await expect(host.page.locator('.overlay')).toHaveCount(0);
 
   // Esc inside an open dropdown only closes the dropdown, not the dialog
-  await host.page.getByRole('button', { name: 'Compartilhar tela' }).click();
+  await host.page.getByRole('button', { name: 'Compartilhar', exact: true }).click();
   await dialog.locator('.select-btn').first().click();
   await expect(host.page.getByRole('listbox')).toBeVisible();
   await host.page.keyboard.press('Escape');
@@ -250,7 +288,7 @@ test('modals close when you click outside them or press Esc, but not when you cl
   await expect(host.page.locator('.overlay')).toHaveCount(0);
 
   // profile dialog
-  await host.page.getByRole('button', { name: 'Opções do perfil' }).click();
+  await host.page.getByRole('button', { name: 'Opções do perfil de Ana' }).click();
   await host.page.getByRole('menuitem', { name: 'Editar perfil' }).click();
   await expect(host.page.getByRole('heading', { name: 'Editar perfil' })).toBeVisible();
   await host.page.locator('.overlay').click({ position: { x: 6, y: 6 } });
@@ -290,4 +328,40 @@ test('a switched-off notification stays silent while the others still play', asy
   } finally {
     await quiet.close();
   }
+});
+
+test('the settings open in a drawer inside the room: the back button works on its whole area, Esc and the backdrop close it, and the room stays', async () => {
+  await createRoom(host.page);
+  const gear = host.page.locator('.topbar').getByRole('button', { name: 'Configurações' });
+  await gear.click();
+  const drawer = host.page.locator('.settings-drawer');
+  await expect(drawer).toBeVisible();
+  await expect(drawer.getByRole('tab')).toHaveText(['Rede', 'Salas fixas', 'Áudio', 'Notificações', 'Transmissão', 'Câmera', 'Sobre']);
+  await expect(host.page.locator('.code-chip')).toBeVisible(); // still in the room behind it
+
+  // the window's title bar is a drag area that swallows clicks: the drawer starts under it, so the top of the back button works too
+  const bar = (await host.page.locator('#titlebar').boundingBox())!;
+  const drawerBox = (await host.page.locator('.drawer-overlay').boundingBox())!;
+  expect(drawerBox.y).toBeGreaterThanOrEqual(bar.y + bar.height - 1);
+  const back = drawer.getByRole('button', { name: 'Voltar' });
+  const backBox = (await back.boundingBox())!;
+  await host.page.mouse.click(backBox.x + backBox.width / 2, backBox.y + 2); // the very top edge of the button
+  await expect(host.page.locator('.drawer-overlay')).toHaveCount(0);
+
+  // Esc and a click on the dark backdrop close it too
+  await gear.click();
+  await expect(drawer).toBeVisible();
+  await host.page.keyboard.press('Escape');
+  await expect(host.page.locator('.drawer-overlay')).toHaveCount(0);
+  await gear.click();
+  await host.page.locator('.drawer-overlay').click({ position: { x: 8, y: 200 } });
+  await expect(host.page.locator('.drawer-overlay')).toHaveCount(0);
+
+  // a setting changed in the drawer is saved without leaving the room
+  await gear.click();
+  await drawer.getByRole('tab', { name: 'Câmera' }).click();
+  await drawer.locator('#panel-camera .select-btn').first().click();
+  await host.page.getByRole('option', { name: '1440p' }).click();
+  await host.page.keyboard.press('Escape');
+  await expect(host.page.locator('.code-chip')).toBeVisible();
 });

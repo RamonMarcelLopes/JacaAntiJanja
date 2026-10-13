@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { WebSocket } from 'ws';
 import { decodeInvite, encodeCloudInvite, encodeInvite, isValidRoomId, parseInvite, roomIdFromBytes, workerHost, parseWorkerAddress } from '../src/shared/invite';
+import { discordText, parseDiscordWebhook } from '../src/shared/discord';
+import { cleanFavorites, cleanFixedRooms } from '../src/shared/rooms';
 import { formatDuration } from '../src/shared/time';
 import { buildStunRequest, classifyVpnInterfaces, isCgnatRange, isPrivateIpv4, natVerdict, parseStunMapped, parseStunResponse } from '../src/main/network';
 import { SignalingServer } from '../src/main/signaling';
@@ -369,4 +371,104 @@ test('Worker address: full address, host or only the account name; anything else
 test('the Worker copy of the shared files is in sync (run pnpm worker:sync after changing src/shared)', async () => {
   const fs = await import('node:fs');
   for (const f of ['invite.ts', 'protocol.ts']) assert.equal(fs.readFileSync(`worker/src/shared/${f}`, 'utf8'), fs.readFileSync(`src/shared/${f}`, 'utf8'), f);
+});
+
+// ---------------------------------------------------------------- Discord webhook of a fixed room
+
+const HOOK_ID = '123456789012345678';
+const HOOK_TOKEN = 'abcDEF_ghi-JKL0123456789xyzABC';
+
+test('Discord webhook: only real Discord webhook addresses are accepted, and the query string is dropped', () => {
+  const canonical = `https://discord.com/api/webhooks/${HOOK_ID}/${HOOK_TOKEN}`;
+  assert.equal(parseDiscordWebhook(canonical), canonical);
+  assert.equal(parseDiscordWebhook(`  ${canonical}  `), canonical);
+  assert.equal(parseDiscordWebhook(`${canonical}?wait=true&thread_id=1`), canonical);
+  assert.equal(parseDiscordWebhook(`${canonical}/`), canonical);
+  // older and test hosts and API versions are normalized to the canonical address
+  assert.equal(parseDiscordWebhook(`https://discordapp.com/api/webhooks/${HOOK_ID}/${HOOK_TOKEN}`), canonical);
+  assert.equal(parseDiscordWebhook(`https://canary.discord.com/api/v10/webhooks/${HOOK_ID}/${HOOK_TOKEN}`), canonical);
+  assert.equal(parseDiscordWebhook(`https://ptb.discord.com/api/webhooks/${HOOK_ID}/${HOOK_TOKEN}`), canonical);
+});
+
+test('Discord webhook: another host, plain http, an incomplete or tampered address are all refused', () => {
+  const bad = [
+    `http://discord.com/api/webhooks/${HOOK_ID}/${HOOK_TOKEN}`, // not https
+    `https://discord.com.evil.example/api/webhooks/${HOOK_ID}/${HOOK_TOKEN}`, // the host only starts like Discord
+    `https://evil.example/https://discord.com/api/webhooks/${HOOK_ID}/${HOOK_TOKEN}`,
+    `https://user@discord.com/api/webhooks/${HOOK_ID}/${HOOK_TOKEN}`, // credentials in front of the host
+    `https://discord.com:8443/api/webhooks/${HOOK_ID}/${HOOK_TOKEN}`, // another port
+    `https://discord.com/api/webhooks/${HOOK_ID}`, // no token
+    `https://discord.com/api/webhooks/12345/${HOOK_TOKEN}`, // short id
+    `https://discord.com/api/webhooks/${HOOK_ID}/short`, // short token
+    `https://discord.com/api/webhooks/${HOOK_ID}/${HOOK_TOKEN}/extra/path`,
+    `https://discord.com/api/webhooks/${HOOK_ID}/${HOOK_TOKEN} https://evil.example`,
+    'https://discord.com/api/webhooks/',
+    '',
+  ];
+  for (const url of bad) assert.equal(parseDiscordWebhook(url), null, url);
+  assert.equal(parseDiscordWebhook(undefined), null);
+  assert.equal(parseDiscordWebhook({ toString: () => 'nope' }), null);
+});
+
+test('Discord text: markdown, mentions and control characters in names are neutralized and the length is capped', () => {
+  const BS = '\\'; // one backslash
+  assert.equal(discordText('Sala *do* Ramon', 32), `Sala ${BS}*do${BS}* Ramon`);
+  assert.equal(discordText('@everyone', 32), `${BS}@everyone`);
+  assert.equal(discordText('a\nb\tc', 32), 'a b c');
+  assert.equal(discordText('  muitos   espaços  ', 32), 'muitos espaços');
+  assert.equal(discordText('x'.repeat(100), 10).length, 10);
+  assert.equal(discordText('`code` [link](http://x) #canal', 40), `${BS}\`code${BS}\` ${BS}[link${BS}]${BS}(http${BS}://x${BS}) ${BS}#canal`);
+  assert.equal(discordText(`um${BS}dois`, 32), `um${BS}${BS}dois`); // a backslash typed by the person cannot escape the escaping
+  assert.equal(discordText(null, 5), '');
+});
+
+// ---------------------------------------------------------------- saved rooms (favorites and fixed rooms)
+
+const ROOM_ID = 'JACAT-ESTE1'.replace('-', '');
+
+test('favorite rooms: only Cloudflare codes survive, in canonical form, once each, with a clean name', () => {
+  const good = encodeCloudInvite(ROOM_ID, 'ramon');
+  const list = cleanFavorites([
+    { code: good.toLowerCase().replace('-', ' '), name: '  Sala   do   Ramon  ' }, // typed any way, name with extra blanks
+    { code: good, name: 'duplicada' }, // the same room again: one entry (the last name wins)
+    { code: encodeInvite({ ip: '10.0.0.1', port: 47800, token: 1 }), name: 'direta' }, // direct codes cannot be favorites
+    { code: 'ABCDE-FGHJK@evil.com', name: 'x' },
+    { code: 42, name: 'x' },
+    null,
+    { name: 'sem código' },
+  ]);
+  assert.deepEqual(list, [{ code: good, name: 'duplicada' }]);
+  assert.equal(cleanFavorites([{ code: good, name: '' }])[0].name, 'Sala'); // a nameless favorite still shows something
+  assert.equal(cleanFavorites([{ code: good, name: 'n'.repeat(100) }])[0].name.length, 32);
+  assert.deepEqual(cleanFavorites('not a list'), []);
+  assert.deepEqual(cleanFavorites(undefined), []);
+});
+
+test('favorite rooms: no more than 20', () => {
+  const many = Array.from({ length: 30 }, (_, i) => ({ code: encodeCloudInvite(roomIdFromBytes(new Uint8Array([1, 2, 3, 4, 5, 6, i])), 'ramon'), name: `Sala ${i}` }));
+  assert.equal(cleanFavorites(many).length, 20);
+});
+
+test('fixed rooms: valid ids only, one entry per id, clean names, and the webhook is never taken from what the window sends back', () => {
+  const list = cleanFixedRooms([
+    { id: ROOM_ID, name: '  Sala   fixa ', discordWebhookEnc: 'c2VjcmV0' },
+    { id: ROOM_ID, name: 'repetida', discordWebhookEnc: '' }, // same id again
+    { id: 'curto', name: 'id inválido' },
+    { id: 'ILOUILOUIL', name: 'letras que não existem no código' },
+    { id: roomIdFromBytes(new Uint8Array([9, 9, 9, 9, 9, 9, 9])), name: '', discordWebhookEnc: 'set' }, // 'set' is what the window sees: not a real value
+    { id: roomIdFromBytes(new Uint8Array([8, 8, 8, 8, 8, 8, 8])), discordWebhookEnc: 42 },
+    null,
+  ]);
+  assert.equal(list.length, 3);
+  assert.deepEqual(list[0], { id: ROOM_ID, name: 'repetida', discordWebhookEnc: '' });
+  assert.equal(list[1].name, 'Sala fixa'); // nameless
+  assert.equal(list[1].discordWebhookEnc, ''); // 'set' never counts as a stored address
+  assert.equal(list[2].discordWebhookEnc, ''); // not a string
+  assert.deepEqual(cleanFixedRooms({}), []);
+  assert.equal(cleanFixedRooms([{ id: ROOM_ID, name: 'a', discordWebhookEnc: 'c2VjcmV0' }])[0].discordWebhookEnc, 'c2VjcmV0'); // a stored address is kept
+});
+
+test('fixed rooms: no more than 10', () => {
+  const many = Array.from({ length: 15 }, (_, i) => ({ id: roomIdFromBytes(new Uint8Array([7, 7, 7, 7, 7, 7, i])), name: `Sala ${i}` }));
+  assert.equal(cleanFixedRooms(many).length, 10);
 });

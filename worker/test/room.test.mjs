@@ -283,3 +283,84 @@ test('a host whose connection dropped can come back without ?create and the room
   await wait();
   assert.ok(guest.msgs.some((m) => m.type === 'room-closed'));
 });
+
+test('a guest who chose to leave cannot take the place back with the old token', async () => {
+  const id = roomId();
+  await createRoom(id, 'Ana', 'Sala X', true);
+  const guest = await joinGuest(id, 'Bia', true);
+  const welcome = guest.msgs.find((m) => m.type === 'welcome').payload;
+  guest.ws.close(1000, 'leave');
+  await wait();
+
+  const back = await open(`/ws/${id}`);
+  send(back.ws, 'join', { token: 0, name: 'Bia', avatar: null, resume: { peerId: welcome.peerId, token: welcome.resumeToken } });
+  await wait();
+  assert.equal(back.msgs.find((m) => m.type === 'error')?.payload.code, 'ROOM_CLOSED');
+});
+
+test('the room status says whether a room is open, its name, its host and how many are in it', async () => {
+  const id = roomId();
+  const status = async () => (await fetch(`${HTTP}/api/room/${id}`)).json();
+  assert.deepEqual(await status(), { open: false }, 'a room nobody created is not open');
+
+  const host = await createRoom(id, 'Ana', 'Sala fixa');
+  assert.deepEqual(await status(), { open: true, name: 'Sala fixa', hostName: 'Ana', count: 1 });
+  await joinGuest(id, 'Bia');
+  assert.equal((await status()).count, 2);
+
+  host.ws.close(1000, 'leave');
+  await wait();
+  assert.deepEqual(await status(), { open: false }, 'closed once the host leaves');
+
+  // the same id can be created again afterwards: that is what a fixed room does every time
+  const again = await createRoom(id, 'Ana', 'Sala fixa');
+  assert.equal(again.msgs.find((m) => m.type === 'welcome')?.payload.roomName, 'Sala fixa');
+  assert.equal((await status()).open, true);
+});
+
+test('the owner can take a room id back (the app closed without ending its fixed room); without takeover the id stays taken', async () => {
+  const id = roomId();
+  const oldHost = await createRoom(id, 'Ana', 'Sala fixa');
+  const guest = await joinGuest(id, 'Bia');
+
+  await assert.rejects(open(`/ws/${id}?create=1&key=${KEY}`), (e) => e.status === 409 || /409|Unexpected/.test(String(e.message)));
+
+  const back = await open(`/ws/${id}?create=1&key=${KEY}&takeover=1`);
+  send(back.ws, 'join', { token: 0, name: 'Ana', avatar: null, roomName: 'Sala fixa' });
+  await wait(400);
+  assert.ok(back.msgs.some((m) => m.type === 'welcome'), 'the owner gets a fresh room');
+  assert.ok(guest.msgs.some((m) => m.type === 'room-closed'), 'the people of the old room are told it ended');
+  assert.equal(back.msgs.filter((m) => m.type === 'room-closed').length, 0, 'the new room is not closed by the old one');
+  assert.equal(oldHost.ws.readyState === 1, false, 'the old connection is closed');
+  assert.equal((await (await fetch(`${HTTP}/api/room/${id}`)).json()).open, true);
+});
+
+test('what is shared (screen or camera) reaches the others, also late joiners; anything else counts as a screen', async () => {
+  const id = roomId();
+  const host = await createRoom(id, 'Ana', 'Sala X');
+  const guest = await joinGuest(id, 'Bia');
+
+  send(host.ws, 'share-started', { resolution: '720p', fps: 30, mode: 'motion', source: 'camera' });
+  await wait();
+  assert.equal(guest.msgs.find((m) => m.type === 'share-started').payload.source, 'camera');
+
+  // switching to a screen without stopping is announced again with the new kind
+  send(host.ws, 'share-started', { resolution: '720p', fps: 30, mode: 'motion', source: 'screen' });
+  await wait();
+  assert.equal(guest.msgs.filter((m) => m.type === 'share-started').at(-1).payload.source, 'screen');
+
+  // an app that does not send the field, or sends nonsense, is a screen
+  send(host.ws, 'share-started', { resolution: '1080p', fps: 60, mode: 'detail' });
+  await wait();
+  assert.equal(guest.msgs.filter((m) => m.type === 'share-started').at(-1).payload.source, 'screen');
+  send(host.ws, 'share-started', { resolution: '1080p', fps: 60, mode: 'detail', source: { evil: true } });
+  await wait();
+  assert.equal(guest.msgs.filter((m) => m.type === 'share-started').at(-1).payload.source, 'screen');
+
+  // somebody who joins later sees the kind in the list of people
+  send(host.ws, 'share-started', { resolution: '720p', fps: 30, mode: 'motion', source: 'camera' });
+  await wait();
+  const late = await joinGuest(id, 'Caio');
+  const peers = late.msgs.find((m) => m.type === 'welcome').payload.peers;
+  assert.equal(peers.find((p) => p.name === 'Ana').share.source, 'camera');
+});

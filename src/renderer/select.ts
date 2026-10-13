@@ -11,12 +11,21 @@ let nextId = 0;
  * value and our own list below it. Mouse, keyboard (arrows, Home/End, Enter/Space, Esc, Tab) and screen readers
  * (combobox + listbox roles) are supported. The button keeps `data-value` in sync with the selected option.
  */
-export function customSelect<T extends string | number>(value: T, options: Array<[T, string]>, onChange: (value: string) => void, ariaLabel?: string): HTMLButtonElement {
+/** Optional three-dot menu on some options (e.g. edit / delete a saved item): `has` says which options get it. */
+export interface RowMenu {
+  has(value: string): boolean;
+  items: Array<{ label: string; danger?: boolean; onSelect(value: string): void }>;
+}
+
+export function customSelect<T extends string | number>(value: T, options: Array<[T, string]>, onChange: (value: string) => void, ariaLabel?: string, rowMenu?: RowMenu): HTMLButtonElement {
   const items = options.map(([v, label]) => ({ value: String(v), label }));
   let current = Math.max(0, items.findIndex((i) => i.value === String(value)));
   let active = current;
   let menu: HTMLElement | null = null;
   let cleanup: (() => void) | null = null;
+  let rowPopup: HTMLElement | null = null; // the small menu of an option's three dots, while it is open
+  let rowAnchor: HTMLElement | null = null; // the dots button that opened it
+  let closeRowPopup: (() => void) | null = null;
   const id = `sel${nextId++}`;
 
   // All labels share one grid cell and only the current one is visible, so the button is always as wide as the longest
@@ -48,7 +57,7 @@ export function customSelect<T extends string | number>(value: T, options: Array
   const place = () => {
     if (!menu) return;
     const r = btn.getBoundingClientRect();
-    menu.style.minWidth = `${r.width}px`;
+    menu.style.minWidth = `${Math.max(r.width, rowMenu ? 260 : 0)}px`; // lists with three dots are wider, so the dots sit well apart from the text
     const mh = menu.offsetHeight;
     const mw = menu.offsetWidth;
     let top = r.bottom + 6;
@@ -62,10 +71,29 @@ export function customSelect<T extends string | number>(value: T, options: Array
     active = current;
     menu = h(
       'div',
-      { class: 'select-menu', role: 'listbox', id: `${id}-list` },
+      { class: `select-menu ${rowMenu ? 'has-row-menu' : ''}`, role: 'listbox', id: `${id}-list` },
       ...items.map((it, i) => {
         const check = h('span', { class: 'select-check', 'aria-hidden': 'true' });
         check.innerHTML = CHECK;
+        const dots =
+          rowMenu?.has(it.value)
+            ? h(
+                'button',
+                {
+                  class: 'opt-kebab',
+                  type: 'button',
+                  title: 'Opções',
+                  'aria-label': `Opções de ${it.label}`,
+                  'aria-haspopup': 'menu',
+                  onmousedown: (e: MouseEvent) => e.preventDefault(),
+                  onclick: (e: MouseEvent) => {
+                    e.stopPropagation(); // does not choose the option
+                    openRowMenu(e.currentTarget as HTMLElement, it.value); // the list stays open under it; a second click closes it
+                  },
+                },
+                h('span', { class: 'kebab-dots', 'aria-hidden': 'true' }),
+              )
+            : null;
         return h(
           'div',
           {
@@ -78,6 +106,7 @@ export function customSelect<T extends string | number>(value: T, options: Array
             onclick: () => choose(i),
           },
           h('span', { class: 'select-option-label' }, it.label),
+          dots,
           check,
         );
       }),
@@ -90,7 +119,7 @@ export function customSelect<T extends string | number>(value: T, options: Array
     btn.classList.add('open');
 
     const onDown = (e: MouseEvent) => {
-      if (!menu?.contains(e.target as Node) && !btn.contains(e.target as Node)) close();
+      if (!menu?.contains(e.target as Node) && !btn.contains(e.target as Node) && !rowPopup?.contains(e.target as Node)) close();
     };
     const onScroll = (e: Event) => {
       if (!menu?.contains(e.target as Node)) close();
@@ -111,6 +140,50 @@ export function customSelect<T extends string | number>(value: T, options: Array
       window.removeEventListener('blur', onAway);
       window.clearInterval(watchdog);
     };
+  }
+
+  /** The small menu of one option's three dots (edit / delete...), opened at the place of the dots after the list closed. */
+  function openRowMenu(anchorEl: HTMLElement, optionValue: string): void {
+    if (!rowMenu) return;
+    const wasOpenHere = rowAnchor === anchorEl;
+    closeRowPopup?.(); // closes whatever menu was open (this option's or another one's)
+    if (wasOpenHere) return; // a second click on the same dots only closes its menu
+    const anchor = anchorEl.getBoundingClientRect();
+    const done = () => {
+      dismiss(popup);
+      if (rowPopup === popup) {
+        rowPopup = null;
+        rowAnchor = null;
+        closeRowPopup = null;
+      }
+      document.removeEventListener('mousedown', onDown, true);
+      document.removeEventListener('keydown', onKey, true);
+    };
+    const popup = h(
+      'div',
+      { class: 'menu row-menu', role: 'menu' },
+      ...rowMenu.items.map((item) =>
+        h('button', { class: `menu-item ${item.danger ? 'danger-item' : ''}`, role: 'menuitem', onclick: () => { done(); close(); item.onSelect(optionValue); } }, item.label), // choosing an action closes the list too
+      ),
+    );
+    rowPopup = popup;
+    rowAnchor = anchorEl;
+    closeRowPopup = done;
+    const onDown = (e: MouseEvent) => {
+      if (!popup.contains(e.target as Node) && !anchorEl.contains(e.target as Node)) done(); // the dots handle their own click (it toggles)
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        done();
+      }
+    };
+    popup.style.top = `${anchor.bottom + 4}px`;
+    popup.style.right = `${Math.max(8, window.innerWidth - anchor.right)}px`;
+    document.addEventListener('mousedown', onDown, true);
+    document.addEventListener('keydown', onKey, true);
+    document.body.append(popup);
+    (popup.firstElementChild as HTMLElement | null)?.focus();
   }
 
   function close(): void {

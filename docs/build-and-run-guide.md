@@ -103,8 +103,12 @@ belongs in the source code.
 app windows (a host and a guest) with separate user-data folders and talks to them through the UI, so do not touch
 the mouse during a run. Specs: `home.spec.ts` (first run, name check, text selection, avatar, settings),
 `room.spec.ts` (room name, join errors, three-dot menu, live profile changes, leave/close) and `share.spec.ts` (real
-screen capture, watching with audio, quality change). They use ports 47851-47853, so they do not clash with a room
-open on the default port. `pnpm test` still runs the fast unit tests (invite code, STUN, signaling server).
+screen capture, watching with audio, quality change). `home-extra.spec.ts` covers the two-button home screen, the
+favorites list (filters, three dots) and Settings > Câmera. `cloudflare.spec.ts` and `fixed-rooms.spec.ts` run against a Worker
+started locally (fixed rooms, taking a room back, favorites, the Discord switch; the webhook itself is only validated, never
+called). `camera.spec.ts` shares a fake camera made by Chromium (`--use-fake-device-for-media-stream`) and switches between camera
+and screen. They use ports 47851-47854, so they do not clash with a room open on the default port. `pnpm test` still runs the
+fast unit tests (invite code, STUN, signaling server, Discord webhook address, the lists of saved rooms).
 
 ## Live-reload development (`pnpm dev`)
 

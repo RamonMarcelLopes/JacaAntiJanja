@@ -1,7 +1,7 @@
 import { dismiss, h } from './dom';
 
 const VIEW = 260; // diameter in px of the circle the person positions the photo in
-const OUT = 128; // size of the saved picture
+const OUT = 256; // size of the saved picture (it was 128; the profile view shows it large, so it needs the extra detail)
 const MAX_ZOOM = 4;
 
 /**

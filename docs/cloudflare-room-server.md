@@ -63,6 +63,39 @@ point the app anywhere but a `workers.dev` address.
 
 The older long codes (`XXXX-XXXX-XXXX-XXXX`) still work: they are the direct mode.
 
+## Fixed rooms, favorites and the Discord notice
+
+**Fixed rooms.** A normal room gets a new code every time. In *Iniciar sala* (home screen) the dropdown *Tipo de sala* also offers
+*+ Nova sala fixa* and the fixed rooms you already have. A fixed room keeps its name and its code: opening it again gives the same code,
+so friends can save it. They are managed in Settings > *Salas fixas* (search, open/closed filter, edit the name, new code, delete) and,
+for one room at a time, with the three dots inside the dropdown. *Novo código* gives the room another id: the old code (and the
+favorites made from it) stop leading anywhere. Up to 10 fixed rooms.
+
+**If the app closed without ending the room.** The room stays open on the Worker for up to a minute. Opening the fixed room again then
+asks what to do: *Reabrir esta sala* (the owner takes the room id back: the Worker ends the old room, tells whoever was in it, and creates
+it again with the same code) or *Criar temporária* (another code, same name). Only the owner key can take a room back
+(`/ws/<id>?create=1&key=...&takeover=1`); without `takeover` an id in use is still refused with 409.
+
+**Favorites.** Inside a Cloudflare room a guest can star it. The list *Salas favoritas* on the home screen shows each favorite as open,
+closed or unknown, with the host and how many people are in it, and has a search and an open/closed filter. The name is always the one
+the host gave (the guest cannot rename it; it follows the host's name). The app asks every favorite's Worker `GET /api/room/<id>`, which
+answers `{ "open": true, "name": "...", "hostName": "...", "count": 2 }` or `{ "open": false }` (the list refreshes every 20 s while the
+home screen is open; a notice appears when a closed favorite opens). The same question tells the owner which fixed rooms are open. It only
+reveals what joining would reveal. Workers older than this version do not know the question: the state is then shown as *Sem resposta*.
+
+**Discord notice (per fixed room).** In *Nova sala fixa* and in *Editar sala* the switch *Avisar no Discord* shows a field for the webhook
+of a channel (channel settings > Integrations > Webhooks). When that room opens, the app posts an embed in that channel: who opened it, the
+room name, the room code and the app icon. Each fixed room has its own webhook (or none). The address is tested when saved (a test
+message is sent), stored encrypted with Windows (safeStorage) inside that room, and never shown again; only
+`https://discord.com/api/webhooks/...` addresses (also `discordapp.com`, `canary.`, `ptb.`) are accepted, names are escaped and nobody is
+pinged (`allowed_mentions` is empty). The code is visible to everybody who sees the channel, which is the point of the notice: use a channel
+you trust. In the direct mode (no Worker) there are no fixed rooms, so there is no notice.
+
+**Updating a Worker you already published.** These features need the new Worker. If you published it with the button, Cloudflare copied
+`worker/` into your own GitHub repository: replace `src/index.ts`, `src/shared/` and `wrangler.toml` there with the ones from this
+repository's `worker/` folder and commit; Cloudflare deploys it again by itself. Rooms and the owner key are not lost (the owner is stored
+in the Worker, not in the code).
+
 ## Security notes
 
 - Creating a room needs the owner key; nobody else can use your Worker to create rooms or spend your free limits that way.
@@ -101,7 +134,7 @@ pnpm test:worker     # starts it and runs the protocol tests against it
 pnpm typecheck:worker
 ```
 
-`worker/src/shared` is a copy of `src/shared/invite.ts` and `protocol.ts` (the button publishes `worker/` alone). After changing those two files run `pnpm worker:sync`; `pnpm test` fails when the copies differ.
+`worker/src/shared` is a copy of `src/shared/invite.ts` and `protocol.ts` (the sharing of a screen or a camera is announced with `source: 'screen' | 'camera'`, which the Worker passes on) (the button publishes `worker/` alone). After changing those two files run `pnpm worker:sync`; `pnpm test` fails when the copies differ.
 
 No Cloudflare account is needed for these. In a development build, set `JACA_WORKER_URL=http://127.0.0.1:8799` to make the app talk to that
 local Worker instead of `workers.dev`.

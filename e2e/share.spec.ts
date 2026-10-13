@@ -10,7 +10,7 @@ test('sharing a screen: the guest sees "AO VIVO", watches the video with audio, 
     const code = await createRoom(host.page);
     await joinRoom(guest.page, code);
 
-    await host.page.getByRole('button', { name: 'Compartilhar tela' }).click();
+    await host.page.getByRole('button', { name: 'Compartilhar', exact: true }).click();
     const dialog = host.page.locator('.dialog');
     await expect(dialog.locator('.source').first()).toBeVisible();
     await dialog.getByRole('button', { name: 'Compartilhar', exact: true }).click();
@@ -146,7 +146,7 @@ test('while you share a whole screen: people entering and leaving still sound, a
   const guest = await launchApp('share2-guest', { name: 'Bia' });
   try {
     const code = await createRoom(host.page);
-    await host.page.getByRole('button', { name: 'Compartilhar tela' }).click();
+    await host.page.getByRole('button', { name: 'Compartilhar', exact: true }).click();
     const dialog = host.page.locator('.dialog');
     await expect(dialog.locator('.source').first()).toBeVisible();
     await dialog.getByRole('button', { name: 'Compartilhar', exact: true }).click();

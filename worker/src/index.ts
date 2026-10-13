@@ -67,6 +67,13 @@ export default {
       return ownerStub(env).fetch('https://owner/status');
     }
 
+    // Is a room open right now (for the favorite rooms list)? Anyone who knows the room id can ask; it reveals only what joining would.
+    const info = /^\/api\/room\/([0-9A-Z]+)$/.exec(url.pathname);
+    if (info && isValidRoomId(info[1])) {
+      const stub = env.ROOMS.get(env.ROOMS.idFromName(info[1]));
+      return stub.fetch('https://room/info', { headers: { 'x-info': '1' } });
+    }
+
     const match = /^\/ws\/([0-9A-Z]+)$/.exec(url.pathname);
     if (match && isValidRoomId(match[1])) {
       if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return new Response('Expected a WebSocket', { status: 426 });
@@ -76,6 +83,7 @@ export default {
       const headers = new Headers(request.headers);
       headers.set('x-room-id', match[1]);
       headers.set('x-create', create ? '1' : '0');
+      headers.set('x-takeover', create && url.searchParams.get('takeover') === '1' ? '1' : '0');
       headers.set('x-host', url.hostname);
       return stub.fetch(new Request(request, { headers }));
     }
@@ -137,6 +145,8 @@ interface Attachment {
 /** How long a participant whose connection dropped is kept in the room while the app tries to reconnect. */
 const RESUME_GRACE_MS = 60_000;
 const AWAY_PREFIX = 'away:';
+/** Written when someone joins (not only when a socket closes), so a place can be taken back even if the close event never reached the Worker. */
+const RESUME_PREFIX = 'resume:';
 
 interface Away {
   att: Attachment;
@@ -157,13 +167,37 @@ export class Room extends DurableObject<Env> {
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'));
   }
 
+  /** Ends the room at once: everyone is told, the sockets are closed without counting as people leaving, and nothing is kept. */
+  private async endRoom(): Promise<void> {
+    this.broadcast({ type: 'room-closed', payload: {} });
+    for (const ws of this.ctx.getWebSockets()) {
+      ws.serializeAttachment({ peerId: null, create: false } satisfies Attachment);
+      this.safeClose(ws, 1000, 'room-closed');
+    }
+    await this.ctx.storage.deleteAll();
+    await this.ctx.storage.deleteAlarm();
+  }
+
+  /** Open = created and its host is in it (or inside the reconnect grace period). Never wakes anything up or starts an alarm. */
+  private async info(): Promise<Response> {
+    const meta = await this.ctx.storage.get<Meta>('meta');
+    const host = meta ? (await this.roster()).find((a) => a.isHost) : undefined;
+    const body = meta && host ? { open: true, name: meta.roomName, hostName: host.name ?? '', count: (await this.roster()).length } : { open: false };
+    return Response.json(body, { headers: { 'cache-control': 'no-store' } });
+  }
+
   async fetch(request: Request): Promise<Response> {
+    if (request.headers.get('x-info') === '1') return this.info();
     const create = request.headers.get('x-create') === '1';
     const roomId = request.headers.get('x-room-id') ?? '';
     const meta = await this.ctx.storage.get<Meta>('meta');
 
     if (create) {
-      if (meta) return new Response('room id already in use', { status: 409 });
+      if (meta) {
+        // the owner (already checked by the Worker's front door) may take a room id back, e.g. when the app closed without ending its fixed room
+        if (request.headers.get('x-takeover') !== '1') return new Response('room id already in use', { status: 409 });
+        await this.endRoom();
+      }
       const m = /^jaca-sala\.([a-z0-9-]+)\.workers\.dev$/.exec(request.headers.get('x-host') ?? '');
       const subdomain = m ? m[1] : 'local'; // 'local' only when running `wrangler dev`
       await this.ctx.storage.put<Meta>('meta', { createdAt: Date.now(), inviteCode: `${formatRoomId(roomId)}@${subdomain}`, roomName: '' });
@@ -254,6 +288,7 @@ export class Room extends DurableObject<Env> {
     const resumeToken = p.canResume === true ? crypto.randomUUID().replace(/-/g, '') : undefined; // only clients that announce the feature get a place kept (older apps leave with a plain close)
     const me: Attachment = { ...att, peerId, name, avatar, share: null, isHost: att.create, resumeToken };
     ws.serializeAttachment(me);
+    if (resumeToken) await this.ctx.storage.put<Attachment>(RESUME_PREFIX + peerId, me);
     ws.send(
       JSON.stringify({
         type: 'welcome',
@@ -268,6 +303,8 @@ export class Room extends DurableObject<Env> {
     const key = AWAY_PREFIX + peerId;
     const away = await this.ctx.storage.get<Away>(key);
     let old: Attachment | null = away && away.att.resumeToken === token ? away.att : null;
+    const stored = await this.ctx.storage.get<Attachment>(RESUME_PREFIX + peerId);
+    if (!old && stored && stored.resumeToken === token) old = stored; // the close event never arrived: the join-time record still proves who this is
     for (const [other, a] of this.joined()) {
       if (a.peerId !== peerId) continue;
       if (a.resumeToken !== token) return this.reject(ws, 'BAD_TOKEN');
@@ -279,6 +316,7 @@ export class Room extends DurableObject<Env> {
     if (!old) return this.reject(ws, 'ROOM_CLOSED'); // grace period over (or never existed): the participant is gone
     await this.ctx.storage.delete(key);
     ws.serializeAttachment({ ...old, create: false } satisfies Attachment);
+    await this.ctx.storage.put<Attachment>(RESUME_PREFIX + peerId, { ...old, create: false });
     const roster = (await this.roster()).filter((a) => a.peerId !== peerId);
     ws.send(
       JSON.stringify({
@@ -298,21 +336,21 @@ export class Room extends DurableObject<Env> {
       if (!name) return;
       att.name = name;
       att.avatar = typeof p.avatar === 'string' && p.avatar.startsWith('data:image/') ? p.avatar : null;
-      ws.serializeAttachment(att);
+      this.save(ws, att);
       this.broadcast({ type: 'peer-updated', payload: { peerId, name: att.name, avatar: att.avatar } }, peerId);
       return;
     }
     if (msg.type === 'share-started') {
       const s = msg.payload as ShareInfo | undefined;
       if (!s || typeof s.resolution !== 'string' || typeof s.fps !== 'number') return;
-      att.share = { resolution: s.resolution, fps: s.fps, mode: s.mode === 'detail' ? 'detail' : 'motion' };
-      ws.serializeAttachment(att);
+      att.share = { resolution: s.resolution, fps: s.fps, mode: s.mode === 'detail' ? 'detail' : 'motion', source: s.source === 'camera' ? 'camera' : 'screen' };
+      this.save(ws, att);
       this.broadcast({ type: 'share-started', from: peerId, payload: att.share }, peerId);
       return;
     }
     if (msg.type === 'share-stopped') {
       att.share = null;
-      ws.serializeAttachment(att);
+      this.save(ws, att);
       this.broadcast({ type: 'share-stopped', from: peerId, payload: {} }, peerId);
       return;
     }
@@ -342,10 +380,17 @@ export class Room extends DurableObject<Env> {
       await this.ctx.storage.deleteAll();
       return;
     }
+    await this.ctx.storage.delete(RESUME_PREFIX + att.peerId);
     this.broadcast({ type: 'peer-left', payload: { peerId: att.peerId } }, att.peerId);
   }
 
   // ------------------------------------------------------------------ helpers
+
+  /** Keeps the socket's attachment and the stored resume record in step. */
+  private save(ws: WebSocket, att: Attachment): void {
+    ws.serializeAttachment(att);
+    if (att.resumeToken && att.peerId) void this.ctx.storage.put<Attachment>(RESUME_PREFIX + att.peerId, att);
+  }
 
   private async awayEntries(): Promise<Map<string, Away>> {
     return this.ctx.storage.list<Away>({ prefix: AWAY_PREFIX });

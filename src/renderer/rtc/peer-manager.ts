@@ -16,6 +16,8 @@ interface Conn {
   makingOffer: boolean;
   ignoreOffer: boolean;
   senders: RTCRtpSender[];
+  /** The stream the tracks of this connection were added with: a track added later (renegotiation) must belong to the same stream, or the viewer would swap its picture for the new one. */
+  sendStream: MediaStream | null;
   remoteStream: MediaStream | null;
   lastLost: number;
   lastReceived: number;
@@ -89,6 +91,39 @@ export class PeerManager {
     this.sig.send('share-started', null, info);
   }
 
+  /** Tells the room that what is shared changed (screen / camera) without touching the connections. */
+  announce(info: ShareInfo): void {
+    if (!this.local) return;
+    this.localInfo = info;
+    this.sig.send('share-started', null, info);
+  }
+
+  /** Puts the tracks of a new capture on the connections that are already sending, so viewers see the new picture without reconnecting. */
+  replaceStream(stream: MediaStream): void {
+    if (!this.local) return;
+    this.local = stream;
+    // a sender whose track was taken away (a camera has no audio) still knows its kind through its transceiver
+    const kindOf = (conn: { pc: RTCPeerConnection }, sender: RTCRtpSender) => sender.track?.kind ?? conn.pc.getTransceivers().find((t) => t.sender === sender)?.receiver.track.kind;
+    for (const conn of this.conns.values()) {
+      if (!conn.senders.length) continue; // this peer is not watching
+      for (const track of stream.getTracks()) {
+        const sender = conn.senders.find((s) => kindOf(conn, s) === track.kind);
+        if (sender) {
+          void sender.replaceTrack(track).catch(() => undefined);
+        } else {
+          // the old capture had no track of this kind (a camera has no audio, a screen does): a new one is added, which renegotiates
+          const added = conn.pc.addTrack(track, conn.sendStream ?? stream);
+          conn.senders.push(added);
+          if (track.kind === 'video') void this.applyParams(added);
+        }
+      }
+      for (const sender of conn.senders) {
+        const kind = kindOf(conn, sender);
+        if (kind && !stream.getTracks().some((t) => t.kind === kind)) void sender.replaceTrack(null).catch(() => undefined); // the new capture has none: the old track must not linger
+      }
+    }
+  }
+
   stopShare(): void {
     if (!this.local) return;
     for (const id of this.watchers) this.removeTracksFrom(id);
@@ -104,6 +139,7 @@ export class PeerManager {
     if (!this.local) return;
     const conn = this.ensure(peerId);
     if (conn.senders.length) return;
+    conn.sendStream = this.local;
     for (const track of this.local.getTracks()) {
       const sender = conn.pc.addTrack(track, this.local);
       conn.senders.push(sender);
@@ -222,6 +258,7 @@ export class PeerManager {
       makingOffer: false,
       ignoreOffer: false,
       senders: [],
+      sendStream: null,
       remoteStream: null,
       lastLost: 0,
       lastReceived: 0,
@@ -243,7 +280,13 @@ export class PeerManager {
       if (e.candidate) this.sig.send('ice', peerId, { candidate: e.candidate });
     };
     pc.ontrack = (e) => {
-      const stream = e.streams[0] ?? new MediaStream([e.track]);
+      let stream = e.streams[0] ?? new MediaStream([e.track]);
+      // a track that arrives later (audio added when the sender switches from a camera to a screen) joins the stream already being watched
+      // instead of replacing it; the old apps send it with the stream of the first tracks, so this only matters for other senders
+      if (conn.remoteStream && conn.remoteStream.active && stream !== conn.remoteStream && !conn.remoteStream.getTracks().some((t) => t.kind === e.track.kind)) {
+        conn.remoteStream.addTrack(e.track);
+        stream = conn.remoteStream;
+      }
       conn.remoteStream = stream;
       if (this.watching === peerId) this.events.onStream(peerId, stream);
     };

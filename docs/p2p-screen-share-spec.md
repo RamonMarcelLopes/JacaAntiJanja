@@ -140,20 +140,20 @@ O app deve ter um botão **Testar conectividade** que verifica se a porta está 
 ### 5.1 Perfil local
 
 - Nome de exibição (obrigatório, até 24 caracteres).
-- Avatar: imagem escolhida do PC (redimensionada para 128×128, enviada como data URL na entrada da sala) ou, por padrão, **iniciais com cor gerada a partir do nome**.
+- Avatar: imagem escolhida do PC (recortada em 256×256, enviada como data URL na entrada da sala; tinha 128×128 até a v0.1.15) ou, por padrão, **iniciais com cor gerada a partir do nome**. Clicar nos três pontinhos de qualquer participante, dentro da sala, abre **Ver perfil**: a foto grande e o nome.
 - Salvo localmente (arquivo de config do Tauri). Sem contas.
 
 ### 5.2 Criar sala (host)
 
-1. Host clica em **Criar sala**.
+1. Host clica em **Iniciar sala** (tela inicial) e, no diálogo, escolhe o nome da sala (sugestão "Jaca room", já selecionada). No modo Cloudflare escolhe também o tipo: sala temporária, uma sala fixa que já tem, ou nova sala fixa (com aviso opcional no Discord).
 2. App sobe o servidor de sinalização, tenta UPnP, descobre IP público via STUN.
 3. Gera token aleatório e exibe o código de convite + botão copiar.
 4. Host entra automaticamente na própria sala.
-5. Fechar a sala (ou o app) encerra a sala para todos.
+5. Fechar a sala (ou o app) encerra a sala para todos. Salas fixas (só no modo Cloudflare) reabrem sempre com o mesmo código; se o app fechou sem encerrar a sala, o host escolhe entre reabri-la ou abrir uma temporária. Detalhes em [cloudflare-room-server.md](cloudflare-room-server.md).
 
 ### 5.3 Entrar na sala (convidado)
 
-1. Convidado clica em **Entrar com código** e cola o código.
+1. Convidado clica em **Entrar**, cola o código no diálogo (ou usa uma **sala favorita**: dentro de uma sala do Cloudflare a estrela favorita a sala, e a lista da tela inicial mostra se cada favorita está aberta, com busca e filtro).
 2. App decodifica IP, porta e token e conecta via WebSocket.
 3. Erros tratados: código inválido, host inacessível, sala cheia, token errado, sala encerrada.
 
@@ -174,11 +174,11 @@ O app deve ter um botão **Testar conectividade** que verifica se a porta está 
   - **Resolução:** 720p · 1080p · 1440p
   - **FPS:** 30 · 60
   - **Modo:** *Movimento* (jogos/vídeo — prioriza fluidez) ou *Detalhe* (texto/código — prioriza nitidez), via `track.contentHint` e `degradationPreference`.
-- Seleção do que compartilhar pelo seletor do sistema (tela inteira ou janela).
+- Seleção do que compartilhar pelo seletor do app (abas **Telas**, **Janelas** e **Câmeras**). A **câmera** é só vídeo (sem áudio do sistema) e tem padrões próprios de resolução, FPS e modo em Configurações > Câmera; câmera ou tela, uma de cada vez. O botão do player "Trocar a tela ou a câmera" troca a fonte sem derrubar a transmissão (quem assiste continua conectado), e a lista de participantes mostra um ícone de monitor ou de câmera em quem transmite. O app só pede permissão de **vídeo** da câmera; o microfone continua negado.
 - **Áudio do sistema** sempre incluído quando disponível.
 - Qualidade pode ser alterada durante o compartilhamento sem derrubar a transmissão (`applyConstraints` + `RTCRtpSender.setParameters`).
 - Mais de uma pessoa pode compartilhar ao mesmo tempo; cada espectador escolhe qual assistir.
-- Sem microfone em nenhum momento: o app **nunca** solicita `getUserMedia` de áudio.
+- Sem microfone em nenhum momento: o app **nunca** solicita `getUserMedia` de áudio (a câmera usa `getUserMedia` só de vídeo).
 
 ### 5.6 ⚠️ Problema conhecido: eco do Discord
 

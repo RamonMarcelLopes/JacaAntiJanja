@@ -3,8 +3,12 @@ import { contextBridge, ipcRenderer } from 'electron';
 contextBridge.exposeInMainWorld('jaca', {
   getConfig: () => ipcRenderer.invoke('config:get'),
   setConfig: (patch: unknown) => ipcRenderer.invoke('config:set', patch),
-  createRoom: (roomName: string) => ipcRenderer.invoke('room:create', roomName),
+  createRoom: (roomName: string, fixedId?: string, takeover?: boolean) => ipcRenderer.invoke('room:create', roomName, fixedId, takeover),
   closeRoom: () => ipcRenderer.invoke('room:close'),
+  saveFixedRoom: (input: unknown) => ipcRenderer.invoke('fixed:save', input),
+  discordNotify: (info: { fixedId: string; code: string }) => ipcRenderer.invoke('discord:notify', info),
+  newFixedRoomCode: (id: string) => ipcRenderer.invoke('room:new-fixed-code', id),
+  roomsStatus: (codes: string[]) => ipcRenderer.invoke('rooms:status', codes),
   testConnectivity: () => ipcRenderer.invoke('net:test'),
   detectVpns: () => ipcRenderer.invoke('net:detect-vpns'),
   natTest: () => ipcRenderer.invoke('net:nat-test'),

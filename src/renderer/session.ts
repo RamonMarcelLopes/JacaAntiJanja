@@ -236,7 +236,51 @@ export class Session {
   /** Id of the screen or window being shared (null when not sharing). */
   sharedSourceId: string | null = null;
 
-  async startSharing(sourceId: string, info: ShareInfo): Promise<void> {
+  async startSharing(sourceId: string, requested: ShareInfo): Promise<void> {
+    const info: ShareInfo = { ...requested, source: sourceId.startsWith('camera:') ? 'camera' : 'screen' };
+    const stream = await this.capture(sourceId, info, () => playSound('self-share-start'));
+    this.local = stream;
+    this.sharedSourceId = sourceId;
+    this.shareInfo = info;
+    this.me().share = info;
+    this.pm.startShare(stream, info);
+    this.onChange();
+  }
+
+  /**
+   * Swaps the screen or window being shared for another one without stopping the transmission: viewers keep their connection and
+   * just see the new picture. When the new capture cannot start, the current one keeps running.
+   */
+  async switchSource(sourceId: string): Promise<void> {
+    const info = this.shareInfo;
+    if (!this.sharing || !info || sourceId === this.sharedSourceId) return;
+    const old = this.local;
+    const stream = await this.capture(sourceId, info, async () => {
+      // the old capture is released only now that the new one was granted
+      old?.getVideoTracks().forEach((t) => (t.onended = null));
+      this.native?.stop();
+      this.native = null;
+      await window.jaca.stopAudio();
+    });
+    this.pm.replaceStream(stream);
+    old?.getTracks().forEach((t) => t.stop());
+    this.local = stream;
+    this.sharedSourceId = sourceId;
+    const source = sourceId.startsWith('camera:') ? 'camera' : 'screen';
+    if (info.source !== source) {
+      // everybody's list of participants shows the icon of what is being shared, so the change is announced
+      const next: ShareInfo = { ...info, source };
+      this.shareInfo = next;
+      this.me().share = next;
+      this.pm.announce(next);
+    }
+    if (this.viewing === this.selfId) this.stream = stream; // the own preview follows the new picture
+    this.onChange();
+  }
+
+  /** Asks for the capture of a screen or window and builds the stream (video + the audio without Discord when available). */
+  private async capture(sourceId: string, info: ShareInfo, afterGrant: () => void | Promise<void>): Promise<MediaStream> {
+    if (sourceId.startsWith('camera:')) return this.captureCamera(sourceId.slice('camera:'.length), info, afterGrant);
     await window.jaca.selectSource(sourceId);
     // getDisplayMedia needs a recent user gesture, so it is called before anything slow.
     // It asks for the full system audio (loopback) as the fallback track.
@@ -247,7 +291,7 @@ export class Session {
       audio: true,
     });
     // Capture is granted. The helper that records the audio only starts after this, so the cue does not end up in the stream.
-    playSound('self-share-start');
+    await afterGrant();
     const audio = await window.jaca.startAudio(sourceId);
     // only problems are shown next to the controls; a working capture needs no announcement
     this.audioNote = audio.ok ? '' : audio.message;
@@ -272,12 +316,24 @@ export class Session {
     const video = stream.getVideoTracks()[0];
     video.contentHint = info.mode === 'detail' ? 'detail' : 'motion';
     video.onended = () => this.stopSharing();
-    this.local = stream;
-    this.sharedSourceId = sourceId;
-    this.shareInfo = info;
-    this.me().share = info;
-    this.pm.startShare(stream, info);
-    this.onChange();
+    return stream;
+  }
+
+  /** A camera instead of a screen: video only (a camera has no system sound). */
+  private async captureCamera(deviceId: string, info: ShareInfo, afterGrant: () => void | Promise<void>): Promise<MediaStream> {
+    const { width, height } = RESOLUTIONS[info.resolution];
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { deviceId: { exact: deviceId }, width: { ideal: width }, height: { ideal: height }, frameRate: { ideal: info.fps } },
+      audio: false,
+    });
+    await afterGrant();
+    // no sound of this app can end up in a camera picture, so incoming audio does not need to be muted
+    this.audioNote = '';
+    this.audioIsolated = true;
+    const video = stream.getVideoTracks()[0];
+    video.contentHint = info.mode === 'detail' ? 'detail' : 'motion';
+    video.onended = () => this.stopSharing(); // unplugged camera
+    return stream;
   }
 
   async updateQuality(info: ShareInfo): Promise<void> {

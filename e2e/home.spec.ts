@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
-import { launchApp, PNG_1X1, sounds } from './app';
+import { enterCode, launchApp, openCreateDialog, PNG_1X1, smallDialog, sounds } from './app';
 
 test('first run: typing a name and creating a room works (no stale config)', async () => {
   // No name saved yet, like a fresh install.
@@ -9,10 +9,15 @@ test('first run: typing a name and creating a room works (no stale config)', asy
   try {
     await expect(a.page.getByPlaceholder('Seu nome')).toHaveValue('');
     await a.page.getByPlaceholder('Seu nome').fill('Ramon');
-    await a.page.getByRole('button', { name: 'Criar sala' }).click();
+    const dialog = await openCreateDialog(a.page);
+    // the name of the room is suggested ("Jaca room") and comes selected, so typing replaces it
+    await expect(dialog.getByPlaceholder('Nome da sala')).toHaveValue('Jaca room');
+    await expect
+      .poll(() => dialog.getByPlaceholder('Nome da sala').evaluate((el: HTMLInputElement) => el.selectionStart === 0 && el.selectionEnd === el.value.length))
+      .toBe(true); // selected a moment after the dialog opens
+    await dialog.getByRole('button', { name: 'Criar sala' }).click();
     await expect(a.page.locator('.code-chip code')).toBeVisible({ timeout: 20_000 });
-    // empty room name falls back to "Sala de <name>"
-    await expect(a.page.getByRole('heading', { name: 'Sala de Ramon' })).toBeVisible();
+    await expect(a.page.getByRole('heading', { name: 'Jaca room' })).toBeVisible();
   } finally {
     await a.close();
   }
@@ -21,7 +26,8 @@ test('first run: typing a name and creating a room works (no stale config)', asy
 test('creating a room without a name asks for one instead of failing', async () => {
   const a = await launchApp('no-name', { port: 47851, hostAddressOverride: '127.0.0.1' });
   try {
-    await a.page.getByRole('button', { name: 'Criar sala' }).click();
+    const dialog = await openCreateDialog(a.page);
+    await dialog.getByRole('button', { name: 'Criar sala' }).click();
     await expect(a.page.locator('.toast.error')).toContainText('Escolha um nome');
     await expect(a.page.getByRole('heading', { name: 'Seu perfil' })).toBeVisible();
   } finally {
@@ -71,7 +77,7 @@ test('settings has a left sidebar with an icon and a name per category, one pane
   try {
     await a.page.getByRole('button', { name: 'Configurações' }).click();
     const tabs = a.page.getByRole('tab');
-    await expect(tabs).toHaveText(['Rede', 'Áudio', 'Notificações', 'Transmissão', 'Sobre']);
+    await expect(tabs).toHaveText(['Rede', 'Salas fixas', 'Áudio', 'Notificações', 'Transmissão', 'Câmera', 'Sobre']);
     for (const tab of await tabs.all()) await expect(tab.locator('svg')).toHaveCount(1); // every entry has an icon
 
     // the sidebar is on the left of the content
@@ -269,14 +275,14 @@ test('Settings > Notificações: volume control saved in the config, mute button
 test('the code field takes a whole Cloudflare code, also with a long account name (it used to cut the end at 24 characters)', async () => {
   const a = await launchApp('long-code', { name: 'Ana' });
   try {
-    const field = a.page.getByPlaceholder('XXXX-XXXX-XXXX-XXXX');
+    await a.page.locator('.home-actions').getByRole('button', { name: 'Entrar' }).click();
+    const field = smallDialog(a.page).getByPlaceholder('XXXX-XXXX-XXXX-XXXX');
     for (const code of ['QVHFG-SPNJF@ramonlopesdev', 'QVHFG-SPNJF@' + 'a'.repeat(63)]) {
       await field.fill(code);
       await expect(field).toHaveValue(code);
     }
     // a code with a wrong account is explained as such, not as a network problem
-    await field.fill('QVHFG-SPNJF@conta-que-nao-existe-xyz-123');
-    await a.page.getByRole('button', { name: 'Entrar', exact: true }).click();
+    await enterCode(a.page, 'QVHFG-SPNJF@conta-que-nao-existe-xyz-123');
     await expect(a.page.locator('.toast.error')).toContainText('não existe', { timeout: 40_000 });
   } finally {
     await a.close();

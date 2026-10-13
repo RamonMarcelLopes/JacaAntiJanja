@@ -1,6 +1,8 @@
-import { AppConfig, DEFAULT_PORT, Fps, Resolution, ShareMode, UpdateState } from '../../shared/protocol';
+import { encodeCloudInvite } from '../../shared/invite';
+import { AppConfig, DEFAULT_PORT, Fps, Resolution, RoomStatus, ShareMode, UpdateState } from '../../shared/protocol';
 import { h, toast } from '../dom';
 import { speakerSvg } from '../icons';
+import { deleteFixedRoom, editFixedRoom } from '../fixed-rooms';
 import { customSelect } from '../select';
 import { playSound, setDisabledSounds, setSoundVolume, SoundName } from '../sounds';
 import { currentState, onUpdateChange } from '../update-banner';
@@ -11,7 +13,7 @@ export interface SettingsContext {
   back(): void;
 }
 
-type Category = 'rede' | 'audio' | 'notificacoes' | 'transmissao' | 'sobre';
+type Category = 'rede' | 'salas' | 'audio' | 'notificacoes' | 'transmissao' | 'camera' | 'sobre';
 
 const svg = (inner: string) =>
   `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
@@ -22,6 +24,11 @@ const CATEGORIES: Array<{ id: Category; label: string; icon: string }> = [
     id: 'rede',
     label: 'Rede',
     icon: svg('<path d="M5 12.55a11 11 0 0 1 14 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/>'),
+  },
+  {
+    id: 'salas',
+    label: 'Salas fixas',
+    icon: svg('<path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>'), // pin
   },
   {
     id: 'audio',
@@ -37,6 +44,11 @@ const CATEGORIES: Array<{ id: Category; label: string; icon: string }> = [
     id: 'transmissao',
     label: 'Transmissão',
     icon: svg('<path d="M2 16.1A5 5 0 0 1 5.9 20M2 12.05A9 9 0 0 1 9.95 20M2 8V6a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-6"/><line x1="2" y1="20" x2="2.01" y2="20"/>'),
+  },
+  {
+    id: 'camera',
+    label: 'Câmera',
+    icon: svg('<path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/>'),
   },
   {
     id: 'sobre',
@@ -420,11 +432,115 @@ export function renderSettings(ctx: SettingsContext): { el: HTMLElement; dispose
   );
   // the network test only matters for Cloudflare rooms (it tells whether the direct connection after the handshake can work), so it lives in that pane
   cloudPane.append(h('h3', { class: 'sound-group-title' }, 'Diagnóstico'), natBtn, natResult);
+
+  // fixed rooms: created from the home screen (kind of room > "+ Nova sala fixa"); here they are renamed, get a new code or are deleted.
+  // Filters like the favorites list on the home screen: by name and by open / closed (asked to the host's own Worker every 20 s).
+  type FixedFilter = 'all' | 'open' | 'closed';
+  let fixedFilter: FixedFilter = 'all';
+  const fixedStatuses = new Map<string, RoomStatus>(); // by room id
+  const fixedList = h('div', { class: 'fav-list' });
+  const fixedSearch = h('input', { type: 'search', class: 'fav-search', placeholder: 'Buscar sala pelo nome', maxLength: 32, 'aria-label': 'Buscar sala fixa pelo nome', spellcheck: false });
+  fixedSearch.addEventListener('input', () => drawFixedRooms());
+  const fixedSeg = h('div', { class: 'seg seg3', role: 'radiogroup', 'aria-label': 'Filtrar salas fixas por estado' });
+  fixedSeg.dataset.pos = '0';
+  const fixedFilterButtons = new Map<FixedFilter, HTMLButtonElement>();
+  for (const [value, label] of [['all', 'Todas'], ['open', 'Abertas'], ['closed', 'Fechadas']] as Array<[FixedFilter, string]>) {
+    const btn = h('button', { class: 'seg-btn', role: 'radio', 'aria-checked': String(value === fixedFilter) }, label);
+    btn.onclick = () => {
+      fixedFilter = value;
+      fixedSeg.dataset.pos = String(['all', 'open', 'closed'].indexOf(value));
+      for (const [v, b] of fixedFilterButtons) b.setAttribute('aria-checked', String(v === value));
+      drawFixedRooms();
+    };
+    fixedFilterButtons.set(value, btn);
+    fixedSeg.append(btn);
+  }
+  /** Lower case without accents, so "sala do joao" finds "Sala do João". */
+  const plain = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+  const fixedStatusText = (st: RoomStatus | undefined): string => {
+    if (!st || st.state === 'unknown') return '';
+    if (st.state === 'closed') return 'Fechada';
+    return `Aberta · ${st.count === 1 ? '1 pessoa' : `${st.count ?? '?'} pessoas`}`;
+  };
+  let fixedSig = '';
+  let fixedDrawn = false;
+  const drawFixedRooms = () => {
+    const rooms = ctx.cfg.fixedRooms;
+    const query = plain(fixedSearch.value.trim());
+    const visible = rooms.filter((r) => (!query || plain(r.name).includes(query)) && (fixedFilter === 'all' || fixedStatuses.get(r.id)?.state === fixedFilter));
+    // redraw only when something changed, so the rows do not replay their entrance while typing or on every status check
+    const sig = JSON.stringify([rooms.length, fixedFilter, query, visible.map((r) => [r.id, r.name, fixedStatuses.get(r.id)?.state, fixedStatuses.get(r.id)?.count])]);
+    if (sig === fixedSig) return;
+    fixedSig = sig;
+    fixedList.classList.toggle('static', fixedDrawn);
+    fixedDrawn = true;
+    if (!rooms.length) {
+      fixedList.replaceChildren(h('p', { class: 'muted' }, 'Nenhuma ainda. Na tela inicial, em "Iniciar sala", escolha "+ Nova sala fixa" no seletor.'));
+      return;
+    }
+    if (!visible.length) {
+      fixedList.replaceChildren(h('p', { class: 'muted' }, 'Nenhuma sala encontrada com esse filtro.'));
+      return;
+    }
+    fixedList.replaceChildren(
+      ...visible.map((room) => {
+        const edit = h('button', { class: 'ghost', onclick: async () => { if (await editFixedRoom(ctx, room)) drawFixedRooms(); } }, 'Editar sala');
+        const newCode = h('button', {
+          class: 'ghost',
+          title: 'Gera um código novo: o antigo, e os favoritos feitos com ele, deixam de funcionar',
+          onclick: async () => {
+            await window.jaca.newFixedRoomCode(room.id);
+            await ctx.update({});
+            drawFixedRooms();
+            toast(`A sala ${room.name} ganhou um código novo. Quem a tinha nos favoritos precisa entrar com o código novo e favoritar de novo.`);
+          },
+        }, 'Novo código');
+        const remove = h('button', { class: 'ghost danger-text', onclick: async () => { if (await deleteFixedRoom(ctx, room)) drawFixedRooms(); } }, 'Apagar');
+        const st = fixedStatuses.get(room.id);
+        return h(
+          'div',
+          { class: 'fav-row', 'data-state': st?.state ?? 'unknown' },
+          h('span', { class: 'fav-dot', 'aria-hidden': 'true' }),
+          h('div', { class: 'fav-info' }, h('strong', {}, room.name), fixedStatusText(st) ? h('small', { class: 'muted' }, fixedStatusText(st)) : null),
+          edit,
+          newCode,
+          remove,
+        );
+      }),
+    );
+  };
+  drawFixedRooms();
+  // which of the host's fixed rooms are open now (the same question the guests' favorites ask)
+  let settingsClosed = false;
+  const pollFixed = async () => {
+    const rooms = ctx.cfg.fixedRooms;
+    if (settingsClosed || document.hidden || !rooms.length) return;
+    const worker = await window.jaca.workerStatus();
+    if (!worker.configured) return;
+    const codes = rooms.map((r) => encodeCloudInvite(r.id, worker.subdomain));
+    const results = await window.jaca.roomsStatus(codes);
+    if (settingsClosed) return;
+    rooms.forEach((r, i) => {
+      const st = results.find((x) => x.code === codes[i]);
+      if (st) fixedStatuses.set(r.id, st);
+    });
+    drawFixedRooms();
+  };
+  window.setTimeout(() => void pollFixed(), 100);
+  const fixedPollTimer = window.setInterval(() => void pollFixed(), 20_000);
   drawMode();
   void refreshWorker();
 
   const panels: Record<Category, HTMLElement> = {
     rede: redePanel,
+    salas: h(
+      'section',
+      {},
+      h('h2', {}, 'Salas fixas'),
+      h('p', { class: 'muted' }, 'Salas que abrem sempre com o mesmo código. Seus amigos podem favoritá-las para ver quando estão abertas. Só funcionam no modo Cloudflare.'),
+      h('div', { class: 'fav-filters' }, fixedSearch, fixedSeg),
+      fixedList,
+    ),
     audio: h(
       'section',
       {},
@@ -440,6 +556,15 @@ export function renderSettings(ctx: SettingsContext): { el: HTMLElement; dispose
       field('Resolução padrão', select<Resolution>(cfg.resolution, [['720p', '720p'], ['1080p', '1080p'], ['1440p', '1440p']], (v) => void ctx.update({ resolution: v as Resolution }))),
       field('FPS padrão', select<number>(cfg.fps, [[30, '30'], [60, '60']], (v) => void ctx.update({ fps: Number(v) as Fps }))),
       field('Modo padrão', select<ShareMode>(cfg.mode, [['motion', 'Movimento (jogos/vídeo)'], ['detail', 'Detalhe (texto/código)']], (v) => void ctx.update({ mode: v as ShareMode }))),
+    ),
+    camera: h(
+      'section',
+      {},
+      h('h2', {}, 'Câmera'),
+      h('p', { class: 'muted' }, 'Padrões usados quando você compartilha a câmera. A tela e as janelas usam os da aba Transmissão. O codec é o mesmo para as duas.'),
+      field('Resolução padrão', select<Resolution>(cfg.cameraResolution, [['720p', '720p'], ['1080p', '1080p'], ['1440p', '1440p']], (v) => void ctx.update({ cameraResolution: v as Resolution })), 'Se a câmera não tiver essa resolução, o Windows usa a mais próxima.'),
+      field('FPS padrão', select<number>(cfg.cameraFps, [[30, '30'], [60, '60']], (v) => void ctx.update({ cameraFps: Number(v) as Fps }))),
+      field('Modo padrão', select<ShareMode>(cfg.cameraMode, [['motion', 'Movimento (rosto, gestos)'], ['detail', 'Detalhe (objetos, texto)']], (v) => void ctx.update({ cameraMode: v as ShareMode }))),
     ),
     sobre: h(
       'section',
@@ -508,6 +633,8 @@ export function renderSettings(ctx: SettingsContext): { el: HTMLElement; dispose
     el: root,
     dispose: () => {
       unsubscribe();
+      settingsClosed = true;
+      window.clearInterval(fixedPollTimer);
       // leaving with Cloudflare selected but not set up: it was never saved as the mode, so the app stays on Direto; say so
       if (mode === 'cloudflare' && !workerConfigured) {
         void ctx.update({ connectionMode: 'direct' });

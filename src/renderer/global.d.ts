@@ -1,12 +1,16 @@
-import type { AppConfig, AudioStartResult, CaptureSource, ConnectivityResult, NatTestResult, RoomInfo, UpdateState, VpnCandidate, WorkerSaveResult, WorkerStatus } from '../shared/protocol';
+import type { AppConfig, AudioStartResult, CaptureSource, ConnectivityResult, DiscordResult, FixedRoomInput, FixedRoomSaveResult, NatTestResult, RoomInfo, RoomStatus, UpdateState, VpnCandidate, WorkerSaveResult, WorkerStatus } from '../shared/protocol';
 
 declare global {
   interface Window {
     jaca: {
       getConfig(): Promise<AppConfig>;
       setConfig(patch: Partial<AppConfig>): Promise<AppConfig>;
-      createRoom(roomName: string): Promise<RoomInfo>;
+      createRoom(roomName: string, fixedId?: string, takeover?: boolean): Promise<RoomInfo>;
       closeRoom(): Promise<void>;
+      saveFixedRoom(input: FixedRoomInput): Promise<FixedRoomSaveResult>;
+      discordNotify(info: { fixedId: string; code: string }): Promise<DiscordResult>;
+      newFixedRoomCode(id: string): Promise<AppConfig>;
+      roomsStatus(codes: string[]): Promise<RoomStatus[]>;
       testConnectivity(): Promise<ConnectivityResult>;
       detectVpns(): Promise<VpnCandidate[]>;
       natTest(): Promise<NatTestResult>;

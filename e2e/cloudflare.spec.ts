@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { launchApp, TestApp } from './app';
+import { createRoom, enterCode, launchApp, TestApp } from './app';
 import { CLAIM_URL, OWNER_KEY, startWorker, WORKER_URL } from './worker';
 
 // These tests use a Worker started locally (no Cloudflare account): the app is pointed at it with JACA_WORKER_URL.
@@ -48,7 +48,7 @@ test('the connection mode defaults to Direto; Cloudflare shows its own fields an
 
     await a.page.getByRole('radio', { name: 'Cloudflare' }).click();
     await expect(a.page.getByRole('radio', { name: 'Cloudflare' })).toHaveAttribute('aria-checked', 'true');
-    await expect(a.page.locator('.seg')).toHaveAttribute('data-pos', '1');
+    await expect(a.page.getByRole('radiogroup', { name: 'Como a sala conecta' })).toHaveAttribute('data-pos', '1'); // (the filter of the fixed rooms has a segmented control too)
     await expect(a.page.getByPlaceholder('sua-conta')).toBeVisible();
     await expect(a.page.getByText('Porta do servidor')).toBeHidden(); // the direct-mode fields get out of the way
     await expect(a.page.getByRole('button', { name: 'Testar minha rede' })).toBeVisible();
@@ -147,17 +147,12 @@ test('a room created through Cloudflare: short code with the account, guest only
   try {
     await configureWorker(host, 'ramon');
     await host.page.getByRole('button', { name: 'Voltar' }).click();
-    await host.page.getByPlaceholder('Nome da sala (opcional)').fill('Noite de filmes');
-    await host.page.getByRole('button', { name: 'Criar sala' }).click();
-    const code = host.page.locator('.code-chip code');
-    await expect(code).toBeVisible({ timeout: 20_000 });
-    const text = (await code.textContent())!.trim();
+    const text = await createRoom(host.page, 'Noite de filmes');
     // the Worker writes the account into the code from its own address (jaca-sala.<account>.workers.dev); a local Worker has none, so it says "local"
     expect(text).toMatch(/^[0-9A-Z]{5}-[0-9A-Z]{5}@local$/);
     await expect(host.page.getByRole('heading', { name: 'Noite de filmes' })).toBeVisible();
 
-    await guest.page.getByPlaceholder('XXXX-XXXX-XXXX-XXXX').fill(text.toLowerCase());
-    await guest.page.getByRole('button', { name: 'Entrar' }).click();
+    await enterCode(guest.page, text.toLowerCase());
     await expect(guest.page.getByRole('heading', { name: 'Participantes' })).toBeVisible({ timeout: 20_000 });
     await expect(guest.page.getByRole('heading', { name: 'Noite de filmes' })).toBeVisible();
     await expect(guest.page.locator('.code-chip code')).toHaveText(text); // everyone sees the same canonical code
@@ -171,8 +166,7 @@ test('a room created through Cloudflare: short code with the account, guest only
     await expect(guest.page.locator('.toast')).toContainText('A sala foi encerrada pelo host.');
 
     // the room is gone for good
-    await guest.page.getByPlaceholder('XXXX-XXXX-XXXX-XXXX').fill(text);
-    await guest.page.getByRole('button', { name: 'Entrar' }).click();
+    await enterCode(guest.page, text);
     await expect(guest.page.locator('.toast.error').last()).toContainText('A sala não existe ou já foi encerrada');
   } finally {
     await guest.close();
@@ -195,8 +189,7 @@ test('Cloudflare codes that could point anywhere else are refused before connect
   const a = await launchApp('cf-bad', { name: 'Bia' }, env);
   try {
     for (const bad of ['ABCDE-FGHJK@evil.com', 'ABCDE-FGHJK@localhost:8080', 'ABCDE-FGHJK@', 'ABCDE-FGHJK@-x', 'SHORT@ramon']) {
-      await a.page.getByPlaceholder('XXXX-XXXX-XXXX-XXXX').fill(bad);
-      await a.page.getByRole('button', { name: 'Entrar' }).click();
+      await enterCode(a.page, bad);
       await expect(a.page.locator('.toast.error').last()).toContainText('Código de convite inválido');
     }
   } finally {

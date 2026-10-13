@@ -187,7 +187,7 @@ export class SignalingServer {
     if (msg.type === 'share-started') {
       const s = msg.payload as ShareInfo | undefined;
       if (!s || typeof s.resolution !== 'string' || typeof s.fps !== 'number') return;
-      peer.share = { resolution: s.resolution, fps: s.fps, mode: s.mode === 'detail' ? 'detail' : 'motion' };
+      peer.share = { resolution: s.resolution, fps: s.fps, mode: s.mode === 'detail' ? 'detail' : 'motion', source: s.source === 'camera' ? 'camera' : 'screen' };
       this.broadcast({ type: 'share-started', from: peer.peerId, payload: peer.share }, peer.peerId);
       return;
     }
