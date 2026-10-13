@@ -57,6 +57,21 @@ test('sharing the camera: the tab with the camera, its own quality defaults, the
     await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.videoWidth), { timeout: 30_000 }).toBeGreaterThan(0);
     expect(await video.evaluate((v: HTMLVideoElement) => (v.srcObject as MediaStream).getAudioTracks().length)).toBe(0);
 
+    // the participants list: the selected live card (icon + quality + AO VIVO) fits inside the list, with no sideways scroll
+    for (const page of [guest.page, host.page]) {
+      const sidebar = page.locator('.sidebar');
+      expect(await sidebar.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+      const list = (await sidebar.boundingBox())!;
+      for (const card of await page.locator('.peer-row').all()) {
+        const box = (await card.boundingBox())!;
+        expect(box.x + box.width).toBeLessThanOrEqual(list.x + list.width + 0.5);
+        expect(box.x).toBeGreaterThanOrEqual(list.x);
+      }
+    }
+    const selected = (await guest.page.locator('.peer.selected').boundingBox())!;
+    const guestSidebar = (await guest.page.locator('.sidebar').boundingBox())!;
+    expect(selected.x + selected.width).toBeLessThan(guestSidebar.x + guestSidebar.width - 4); // the yellow border keeps a margin to the edge
+
     // the host looks at their own picture; the switch button sits next to "stop watching" and only exists while sharing
     await anaOnHost.click();
     await host.page.locator('.player').hover();

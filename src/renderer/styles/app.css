@@ -855,3 +855,14 @@ video::-webkit-media-controls, video::-webkit-media-controls-enclosure, video::-
 /* participants list: icon that tells a screen from a camera, before the quality text */
 .share-kind { display: inline-flex; vertical-align: -2px; margin-right: 5px; color: var(--ok); }
 .peer:disabled .share-kind { color: var(--ok); }
+
+/* participants list: the card never grows past the list (no sideways scroll, the yellow border of the selected card is not cut) */
+.sidebar { overflow-x: hidden; overflow-y: auto; }
+.peer { min-width: 0; box-sizing: border-box; }
+.peer-list, .peer-row { min-width: 0; }
+.peer-meta { min-width: 0; gap: 5px; }
+.peer-meta .meta-text { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.peer-meta .meta-rtt, .peer-meta .dot, .peer-meta .share-kind { flex: none; }
+.peer .avatar, .peer .badge-live { flex: none; }
+.badge-live { font-size: 10px; padding: 2px 7px; }
+.share-kind { margin-right: 0; }
