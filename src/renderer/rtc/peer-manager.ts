@@ -21,6 +21,8 @@ interface Conn {
   remoteStream: MediaStream | null;
   lastLost: number;
   lastReceived: number;
+  lastSendLog: number;
+  lastBytesSent: number;
 }
 
 const ICE_SERVERS: RTCIceServer[] = [{ urls: 'stun:stun.l.google.com:19302' }];
@@ -258,6 +260,8 @@ export class PeerManager {
       remoteStream: null,
       lastLost: 0,
       lastReceived: 0,
+      lastSendLog: 0,
+      lastBytesSent: 0,
     };
     this.conns.set(peerId, conn);
 
@@ -328,6 +332,26 @@ export class PeerManager {
 
   // ------------------------------------------------------------------ stats
 
+  /**
+   * Every 10 s while sending, one line in jaca.log with what the encoder is doing: which codec and encoder (software or the graphics card),
+   * the real frame rate and bitrate, and why the quality is being held back (cpu / bandwidth). It is the first thing to read when a friend
+   * says the picture stutters.
+   */
+  private logSending(peerId: string, conn: Conn, report: RTCStatsReport, s: any): void {
+    const now = performance.now();
+    const bytes: number = s.bytesSent ?? 0;
+    if (conn.lastSendLog && now - conn.lastSendLog < 10_000) return;
+    const kbps = conn.lastSendLog ? Math.round(((bytes - conn.lastBytesSent) * 8) / (now - conn.lastSendLog)) : 0;
+    conn.lastSendLog = now;
+    conn.lastBytesSent = bytes;
+    const codec = (report.get(s.codecId) as any)?.mimeType ?? '?';
+    const encode = s.framesEncoded ? Math.round((s.totalEncodeTime / s.framesEncoded) * 1000) : 0;
+    void window.jaca.log(
+      'sala',
+      `envio para ${peerId.slice(0, 4)}: ${codec} · encoder ${s.encoderImplementation ?? '?'}${s.powerEfficientEncoder ? ' (hardware)' : ''} · ${s.frameWidth ?? '?'}x${s.frameHeight ?? '?'} ${Math.round(s.framesPerSecond ?? 0)} fps · ${kbps} kbps · ${encode} ms/quadro · limite: ${s.qualityLimitationReason ?? '?'}`,
+    );
+  }
+
   private async pollStats(): Promise<void> {
     for (const [id, conn] of this.conns) {
       if (conn.pc.connectionState !== 'connected') continue;
@@ -337,6 +361,7 @@ export class PeerManager {
         let lost = 0;
         let received = 0;
         report.forEach((s: any) => {
+          if (s.type === 'outbound-rtp' && s.kind === 'video') this.logSending(id, conn, report, s);
           if (s.type === 'candidate-pair' && s.nominated && typeof s.currentRoundTripTime === 'number') rtt = s.currentRoundTripTime * 1000;
           if (s.type === 'inbound-rtp') {
             lost += s.packetsLost ?? 0;
