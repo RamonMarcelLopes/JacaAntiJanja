@@ -364,3 +364,26 @@ test('what is shared (screen or camera) reaches the others, also late joiners; a
   const peers = late.msgs.find((m) => m.type === 'welcome').payload.peers;
   assert.equal(peers.find((p) => p.name === 'Ana').share.source, 'camera');
 });
+
+test('the number of people watching a share travels with it, is kept for late joiners, and anything odd counts as zero', async () => {
+  const id = roomId();
+  const host = await createRoom(id, 'Ana', 'Sala X');
+  const guest = await joinGuest(id, 'Bia');
+
+  send(host.ws, 'share-started', { resolution: '720p', fps: 30, mode: 'motion', source: 'screen', viewers: 3 });
+  await wait();
+  assert.equal(guest.msgs.filter((m) => m.type === 'share-started').at(-1).payload.viewers, 3);
+
+  // an app that does not send the count, or sends something that is not a whole number, counts as nobody; a huge number is capped
+  for (const [sent, expected] of [[undefined, 0], ['7', 0], [-2, 0], [1.5, 0], [{ evil: true }, 0], [100000, 999]]) {
+    send(host.ws, 'share-started', { resolution: '720p', fps: 30, mode: 'motion', source: 'screen', viewers: sent });
+    await wait();
+    assert.equal(guest.msgs.filter((m) => m.type === 'share-started').at(-1).payload.viewers, expected, `viewers: ${JSON.stringify(sent)}`);
+  }
+
+  // somebody who joins later sees the count in the list of people
+  send(host.ws, 'share-started', { resolution: '720p', fps: 30, mode: 'motion', source: 'screen', viewers: 2 });
+  await wait();
+  const late = await joinGuest(id, 'Caio');
+  assert.equal(late.msgs.find((m) => m.type === 'welcome').payload.peers.find((p) => p.name === 'Ana').share.viewers, 2);
+});

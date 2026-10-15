@@ -1,5 +1,5 @@
 import { expect, Page, test } from '@playwright/test';
-import { createRoom, enterCode, joinRoom, launchApp, PNG_1X1, smallDialog, sounds, TestApp } from './app';
+import { createRoom, enterCode, joinRoom, launchApp, openShareDialog, PNG_1X1, smallDialog, sounds, TestApp } from './app';
 
 let host: TestApp;
 let guest: TestApp;
@@ -196,8 +196,8 @@ test('the room timer in the header counts from when the room was opened, also fo
     .poll(async () => seconds((await guest.page.locator('.room-timer-text').textContent())!), { timeout: 5000 })
     .toBeGreaterThan(guestStart);
   const timerBox = (await host.page.locator('.room-timer').boundingBox())!;
-  const leaveBox = (await host.page.getByRole('button', { name: 'Encerrar sala' }).boundingBox())!;
-  expect(timerBox.x + timerBox.width).toBeLessThanOrEqual(leaveBox.x); // in the header, left of the leave button
+  const gearBox = (await host.page.locator('.topbar').getByRole('button', { name: 'Configurações' }).boundingBox())!;
+  expect(timerBox.x + timerBox.width).toBeLessThanOrEqual(gearBox.x); // in the header, left of the settings button (leaving lives in the call dock now)
 });
 
 test('everyone in the room sees the invite code and can copy it, not only the host', async () => {
@@ -218,9 +218,9 @@ test('a guest who typed the code in lowercase still sees the canonical code in t
   await expect(guest.page.locator('.code-chip code')).toHaveText(code);
 });
 
-test('the share dialog has Telas, Janelas and Câmeras tabs that swipe, a fixed size, and no worst-case upload text', async () => {
+test('the share dialog has Telas and Janelas tabs that swipe, a fixed size, and no worst-case upload text', async () => {
   await createRoom(host.page);
-  await host.page.getByRole('button', { name: 'Compartilhar', exact: true }).click();
+  await openShareDialog(host.page);
   const dialog = host.page.locator('.dialog');
   const visibleSources = dialog.locator('.source-panel:not([inert]) .source');
   const size = async () => {
@@ -228,7 +228,7 @@ test('the share dialog has Telas, Janelas and Câmeras tabs that swipe, a fixed 
     return `${Math.round(b.width)}x${Math.round(b.height)}`;
   };
 
-  await expect(dialog.getByRole('tab')).toHaveText(['Telas', 'Janelas', 'Câmeras']);
+  await expect(dialog.getByRole('tab')).toHaveText(['Telas', 'Janelas']); // the camera has its own menu on the camera button
   await expect(dialog.getByText(/Pior caso/)).toHaveCount(0);
   const fixedSize = await size();
 
@@ -246,7 +246,7 @@ test('the share dialog has Telas, Janelas and Câmeras tabs that swipe, a fixed 
   await expect(visibleSources.first()).toBeVisible();
   await expect(dialog.locator('.source.selected')).toHaveCount(1);
   await expect(dialog.getByRole('button', { name: 'Compartilhar', exact: true })).toBeEnabled();
-  await expect(dialog.locator('.source-panel[inert]')).toHaveCount(2); // the hidden lists cannot be tabbed into
+  await expect(dialog.locator('.source-panel[inert]')).toHaveCount(1); // the hidden list cannot be tabbed into
 
   // the modal never changes size when switching tabs; the lists scroll inside it
   expect(await size()).toBe(fixedSize);
@@ -263,7 +263,7 @@ test('modals close when you click outside them or press Esc, but not when you cl
   await createRoom(host.page);
 
   // share dialog
-  await host.page.getByRole('button', { name: 'Compartilhar', exact: true }).click();
+  await openShareDialog(host.page);
   const dialog = host.page.locator('.dialog');
   await expect(dialog).toBeVisible();
   await dialog.locator('h2').click(); // inside: stays open
@@ -272,13 +272,13 @@ test('modals close when you click outside them or press Esc, but not when you cl
   await expect(host.page.locator('.overlay')).toHaveCount(0); // gone once the exit animation finishes
 
   // Esc closes it too
-  await host.page.getByRole('button', { name: 'Compartilhar', exact: true }).click();
+  await openShareDialog(host.page);
   await expect(dialog).toBeVisible();
   await host.page.keyboard.press('Escape');
   await expect(host.page.locator('.overlay')).toHaveCount(0);
 
   // Esc inside an open dropdown only closes the dropdown, not the dialog
-  await host.page.getByRole('button', { name: 'Compartilhar', exact: true }).click();
+  await openShareDialog(host.page);
   await dialog.locator('.select-btn').first().click();
   await expect(host.page.getByRole('listbox')).toBeVisible();
   await host.page.keyboard.press('Escape');
@@ -360,7 +360,7 @@ test('the settings open in a drawer inside the room: the back button works on it
   // a setting changed in the drawer is saved without leaving the room
   await gear.click();
   await drawer.getByRole('tab', { name: 'Câmera' }).click();
-  await drawer.locator('#panel-camera .select-btn').first().click();
+  await drawer.locator('#panel-camera .select-btn').nth(1).click(); // the first one is the default camera, then the resolution
   await host.page.getByRole('option', { name: '1440p' }).click();
   await host.page.keyboard.press('Escape');
   await expect(host.page.locator('.code-chip')).toBeVisible();

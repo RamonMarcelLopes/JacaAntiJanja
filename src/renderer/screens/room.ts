@@ -440,7 +440,7 @@ export function renderRoom(ctx: RoomContext): { el: HTMLElement; dispose(): void
     tilesSig = sig;
     tileOf.clear();
     const cols = peers.length === 2 ? 1 : Math.max(1, Math.ceil(Math.sqrt(peers.length))); // two people sit one above the other
-    const size = peers.length <= 1 ? 140 : peers.length <= 4 ? 112 : 84; // photos are saved at 128 px, so they stay sharp
+    const size = peers.length <= 1 ? 140 : peers.length <= 4 ? 112 : 84; // photos are saved at 256 px, so they stay sharp
     tiles.style.setProperty('--cols', String(cols));
     tiles.style.setProperty('--rows', String(Math.max(1, Math.ceil(peers.length / cols))));
     tiles.replaceChildren(
@@ -1043,7 +1043,7 @@ export function renderRoom(ctx: RoomContext): { el: HTMLElement; dispose(): void
     // Trocar tela / Qualidade belong to the owner of the transmission, and only show while looking at your own screen (not someone else's)
     const ownMenu = session.sharing && session.shareInfo?.source !== 'camera' && session.viewing === session.selfId; // a camera transmission has its own menu on the camera button
     screenDockBtn.classList.toggle('no-menu', !ownMenu);
-    if (!ownMenu && menuLevels.length) closeScreenMenu();
+    if (!ownMenu && menuOwner === screenDockBtn) closeScreenMenu(); // only the screen menu depends on this; the camera menu stays open
     cameraDockBtn.classList.toggle('on', session.sharing && session.shareInfo?.source === 'camera');
     const ownPreview = !!viewing && viewing.peerId === session.selfId && !!session.shareInfo;
     netInfo.style.display = ownPreview ? 'inline-flex' : 'none';

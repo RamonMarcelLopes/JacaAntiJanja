@@ -113,15 +113,17 @@ test('Configurações > Câmera has its own defaults, saved separately from Tran
     await a.page.getByRole('tab', { name: 'Câmera' }).click();
     await expect(a.page.getByRole('heading', { name: 'Câmera', exact: true })).toBeVisible();
     const panel = a.page.locator('#panel-camera');
+    // the first dropdown is the default camera (empty without any camera, otherwise the first one found), then resolution, fps and mode
     const selects = panel.locator('.select-btn');
-    await expect(selects).toHaveCount(3);
-    await expect(selects.nth(0)).toHaveAttribute('data-value', '720p'); // the camera starts lighter than the screen
-    await expect(selects.nth(1)).toHaveAttribute('data-value', '30');
-    await expect(selects.nth(2)).toHaveAttribute('data-value', 'motion');
+    await expect(selects).toHaveCount(4);
+    await expect(selects.nth(0)).toHaveAttribute('data-value', /^(camera:.+)?$/);
+    await expect(selects.nth(1)).toHaveAttribute('data-value', '720p'); // the camera starts lighter than the screen
+    await expect(selects.nth(2)).toHaveAttribute('data-value', '30');
+    await expect(selects.nth(3)).toHaveAttribute('data-value', 'motion');
 
-    await selects.nth(0).click();
+    await selects.nth(1).click();
     await a.page.getByRole('option', { name: '1080p' }).click();
-    await selects.nth(2).click();
+    await selects.nth(3).click();
     await a.page.getByRole('option', { name: /Detalhe/ }).click();
     await expect.poll(() => readConfig(a).cameraResolution).toBe('1080p');
     await expect.poll(() => readConfig(a).cameraMode).toBe('detail');

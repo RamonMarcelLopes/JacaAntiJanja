@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { createRoom, joinRoom, launchApp, sounds } from './app';
+import { createRoom, joinRoom, launchApp, openShareDialog, sounds, stopSharing } from './app';
 
 // Needs a real desktop session: it captures the first screen and watches it from the second instance.
 test('sharing a screen: the guest sees "AO VIVO", watches the video with audio, and it stops cleanly', async () => {
@@ -10,7 +10,7 @@ test('sharing a screen: the guest sees "AO VIVO", watches the video with audio, 
     const code = await createRoom(host.page);
     await joinRoom(guest.page, code);
 
-    await host.page.getByRole('button', { name: 'Compartilhar', exact: true }).click();
+    await openShareDialog(host.page);
     const dialog = host.page.locator('.dialog');
     await expect(dialog.locator('.source').first()).toBeVisible();
     await dialog.getByRole('button', { name: 'Compartilhar', exact: true }).click();
@@ -73,11 +73,14 @@ test('sharing a screen: the guest sees "AO VIVO", watches the video with audio, 
     await fs.click();
     await expect(fs).toHaveAttribute('aria-label', 'Tela cheia');
     await expect.poll(() => guest.page.evaluate(() => document.fullscreenElement === null)).toBe(true);
-    // the eye + counter sit at the far right of the controls bar
-    const bar = (await host.page.locator('.controls').boundingBox())!;
-    const eye = (await host.page.locator('.viewers').boundingBox())!;
-    expect(bar.x + bar.width - (eye.x + eye.width)).toBeLessThan(16);
-    await expect(host.page.locator('.viewers')).toHaveAttribute('title', /1 espectador/);
+    // the eye + counter sit beside AO VIVO in the sharer's card of the participants list, at its far right
+    const side = host.page.locator('.peer-row', { hasText: 'Ana (você)' }).locator('.peer-side');
+    await expect(side.locator('.viewers')).toHaveAttribute('title', /1 espectador/);
+    const card = (await host.page.locator('.peer-row', { hasText: 'Ana (você)' }).boundingBox())!;
+    const live = (await side.locator('.badge-live').boundingBox())!;
+    const eye = (await side.locator('.viewers').boundingBox())!;
+    expect(eye.x + eye.width).toBeLessThanOrEqual(live.x); // the counter is to the left of AO VIVO
+    expect(card.x + card.width - (live.x + live.width)).toBeLessThan(10); // AO VIVO ends close to the card's right border
     await expect(host.page.getByText('Ninguém assistindo ainda.')).toHaveCount(0);
     await expect(host.page.getByText('Áudio do sistema sem o Discord.')).toHaveCount(0);
 
@@ -98,13 +101,15 @@ test('sharing a screen: the guest sees "AO VIVO", watches the video with audio, 
     await host.page.mouse.move(2, 2);
     await expect(host.page.locator('.netinfo-tip')).toBeHidden();
 
-    // quality can be changed without dropping the stream
-    await host.page.locator('.controls .select-btn').first().click();
-    await host.page.getByRole('option', { name: '720p' }).click();
-    await expect(host.page.locator('.controls .select-btn').first()).toHaveAttribute('data-value', '720p');
+    // quality can be changed without dropping the stream: the chevron of the screen button opens Qualidade > Resolução > the choices
+    await host.page.locator('.player').hover();
+    await host.page.locator('.dock-screen .dock-chev').click();
+    await host.page.getByRole('menuitem', { name: /Qualidade/ }).click();
+    await host.page.getByRole('menuitem', { name: /Resolução/ }).click();
+    await host.page.getByRole('menuitem', { name: '720p' }).click();
     await expect(guest.page.locator('.peer', { hasText: 'Ana' })).toContainText('720p');
 
-    // the stop-watching button: icon only, red, centered at the bottom of the picture, shown only while the pointer is over it
+    // the stop-watching button is the screen button of the dock: red with an X, centered at the bottom of the picture, shown only while the pointer is over it
     const hoverables = guest.page.locator('.pb-hover');
     await guest.page.mouse.move(2, 300);
     await expect(hoverables.first()).toHaveCSS('opacity', '0');
@@ -112,27 +117,26 @@ test('sharing a screen: the guest sees "AO VIVO", watches the video with audio, 
     await hoverPicture();
     await expect(hoverables.first()).toHaveCSS('opacity', '1');
     await expect(hoverables.last()).toHaveCSS('opacity', '1');
-    const stop = guest.page.locator('.stop-btn');
+    const stop = guest.page.locator('.dock-screen');
     await expect(stop).toHaveAttribute('aria-label', 'Parar de assistir');
-    await expect(stop).toHaveText('');
-    await expect(stop).toHaveCSS('color', 'rgb(255, 90, 54)');
+    await expect(stop).toHaveCSS('background-color', 'rgb(255, 90, 54)');
     const pictureBox = (await guest.page.locator('.player').boundingBox())!;
-    const stopBox = (await stop.boundingBox())!;
-    expect(Math.abs(stopBox.x + stopBox.width / 2 - (pictureBox.x + pictureBox.width / 2))).toBeLessThan(3);
-    expect(stopBox.y + stopBox.height).toBeGreaterThan(pictureBox.y + pictureBox.height * 0.75);
-    expect(stopBox.y + stopBox.height).toBeLessThanOrEqual(pictureBox.y + pictureBox.height);
+    const dockBox = (await guest.page.locator('.call-dock').boundingBox())!;
+    expect(Math.abs(dockBox.x + dockBox.width / 2 - (pictureBox.x + pictureBox.width / 2))).toBeLessThan(3);
+    expect(dockBox.y + dockBox.height).toBeGreaterThan(pictureBox.y + pictureBox.height * 0.75);
+    expect(dockBox.y + dockBox.height).toBeLessThanOrEqual(pictureBox.y + pictureBox.height);
     await stop.click();
-    await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.srcObject === null)).toBe(true);
-    await expect(host.page.locator('.viewers-count')).toHaveText('0');
+    await expect(guest.page.locator('video')).toHaveCount(0); // the picture is gone
+    await expect(host.page.locator('.peer-row', { hasText: 'Ana (você)' }).locator('.viewers-count')).toHaveText('0');
 
     // the quality change above re-announces the share but must not replay the "friend started sharing" sound
     expect((await sounds(guest.page)).filter((s) => s === 'peer-share-start')).toHaveLength(1);
 
-    await host.page.getByRole('button', { name: 'Parar de compartilhar' }).click();
+    await stopSharing(host.page);
     await expect.poll(() => sounds(host.page)).toContain('self-share-stop');
     await expect.poll(() => sounds(guest.page)).toContain('peer-share-stop');
     await expect(guest.page.locator('.peer.live')).toHaveCount(0);
-    await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.srcObject === null)).toBe(true);
+    await expect(guest.page.locator('video')).toHaveCount(0);
   } finally {
     await guest.close();
     await host.close();
@@ -146,7 +150,7 @@ test('while you share a whole screen: people entering and leaving still sound, a
   const guest = await launchApp('share2-guest', { name: 'Bia' });
   try {
     const code = await createRoom(host.page);
-    await host.page.getByRole('button', { name: 'Compartilhar', exact: true }).click();
+    await openShareDialog(host.page);
     const dialog = host.page.locator('.dialog');
     await expect(dialog.locator('.source').first()).toBeVisible();
     await dialog.getByRole('button', { name: 'Compartilhar', exact: true }).click();

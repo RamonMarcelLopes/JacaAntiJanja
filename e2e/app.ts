@@ -70,6 +70,17 @@ export async function createRoom(host: Page, roomName?: string): Promise<string>
   return (await code.textContent())!.trim();
 }
 
+/** Opens the share dialog from the screen button of the call dock (nothing open and nothing shared: the dock sits over the participant tiles). */
+export async function openShareDialog(page: Page): Promise<void> {
+  await page.locator('.dock-screen').click();
+}
+
+/** Ends your own transmission from the screen button of the dock (it sits in the player bar, which only reacts while the pointer is over the picture). */
+export async function stopSharing(page: Page): Promise<void> {
+  await page.locator('.player').hover();
+  await page.getByRole('button', { name: 'Parar de compartilhar' }).click();
+}
+
 /** Types a code in the "enter" dialog of the home screen (opening it if needed) and confirms; does not wait for the result. */
 export async function enterCode(page: Page, code: string): Promise<void> {
   const dialog = smallDialog(page);
