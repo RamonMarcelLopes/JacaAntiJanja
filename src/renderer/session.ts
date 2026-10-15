@@ -14,9 +14,12 @@ export type EndReason = 'room-closed' | 'lost' | 'left';
 /** One joined room: signaling connection, participants, and sharing state. */
 export class Session {
   peers = new Map<string, PeerView>();
-  /** Peer whose stream is shown in the player (own id = local preview). */
+  /** Peer in focus, the one the player shows large (own id = local preview). Always one of `watched`, or null. */
   viewing: string | null = null;
-  stream: MediaStream | null = null;
+  /** Everybody being watched at the same time (screens and cameras), the focused one included; own id = local preview. */
+  watched = new Set<string>();
+  /** Incoming pictures by person, filled when their connection delivers it. */
+  private streams = new Map<string, MediaStream>();
   shareInfo: ShareInfo | null = null;
   audioNote = '';
   roomName = '';
@@ -55,11 +58,12 @@ export class Session {
     s.pm = new PeerManager(sig, welcome.peerId, {
       onStream: (id, stream) => {
         if (stream) {
-          s.viewing = id;
-          s.stream = stream;
-        } else if (s.viewing === id) {
-          s.viewing = null;
-          s.stream = null;
+          s.streams.set(id, stream);
+          if (!s.viewing) s.viewing = id;
+        } else {
+          s.streams.delete(id);
+          s.watched.delete(id);
+          if (s.viewing === id) s.viewing = s.watched.values().next().value ?? null; // another one being watched takes the focus
         }
         s.onChange();
       },
@@ -72,7 +76,15 @@ export class Session {
         }
       },
       onConnectionFailed: (id) => s.onNotice(`Não foi possível conectar com ${s.peers.get(id)?.name ?? 'o participante'}.`, 'error'),
-      onWatchersChanged: () => s.onChange(),
+      onWatchersChanged: (count) => {
+        // everybody sees how many people watch you, so the count travels with the share announcement
+        if (s.shareInfo && s.shareInfo.viewers !== count) {
+          s.shareInfo = { ...s.shareInfo, viewers: count };
+          s.me().share = s.shareInfo;
+          s.pm.announce(s.shareInfo);
+        }
+        s.onChange();
+      },
     });
     s.pm.setCodec(cfg.codec);
     sig.onMessage = (m) => void s.handle(m);
@@ -102,7 +114,7 @@ export class Session {
       if (known) Object.assign(known, { name: p.name, avatar: p.avatar, share: p.share });
       else this.peers.set(p.peerId, { ...p, quality: 'unknown', rtt: null });
     }
-    if (this.viewing && this.viewing !== this.selfId && !this.peers.get(this.viewing)?.share) this.stopViewing();
+    for (const id of [...this.watched]) if (id !== this.selfId && !this.peers.get(id)?.share) this.removeView(id);
     this.onNotice('Reconectado à sala.', 'info');
     this.onChange();
   }
@@ -207,28 +219,61 @@ export class Session {
     this.onChange();
   }
 
-  /** Click on a participant card: watch their stream (or preview your own). */
+  /** The picture to show for somebody being watched (your own preview is the local capture); null while it has not arrived. */
+  streamOf(peerId: string): MediaStream | null {
+    return peerId === this.selfId ? this.local : (this.streams.get(peerId) ?? null);
+  }
+
+  /** The picture in focus. */
+  get stream(): MediaStream | null {
+    return this.viewing ? this.streamOf(this.viewing) : null;
+  }
+
+  /** Click on a participant card: watch only their stream (or preview only your own), leaving everything else. */
   view(peerId: string): void {
-    if (peerId === this.selfId) {
-      if (!this.sharing) return;
-      this.pm.unwatch();
-      this.viewing = peerId;
-      this.stream = this.local;
-      this.onChange();
-      return;
-    }
-    if (!this.peers.get(peerId)?.share) return;
-    this.pm.watch(peerId);
+    if (!this.canWatch(peerId)) return;
+    for (const id of [...this.watched]) if (id !== peerId) this.removeView(id);
+    this.addView(peerId);
     this.viewing = peerId;
-    this.stream = null;
     this.onChange();
   }
 
-  stopViewing(): void {
-    this.pm.unwatch();
-    this.viewing = null;
-    this.stream = null;
+  /** Watch one more screen or camera without leaving the ones already open. The first one watched takes the focus. */
+  addView(peerId: string): void {
+    if (!this.canWatch(peerId) || this.watched.has(peerId)) return;
+    this.watched.add(peerId);
+    if (peerId !== this.selfId) this.pm.watch(peerId);
+    if (!this.viewing) this.viewing = peerId;
     this.onChange();
+  }
+
+  /** Puts somebody who is already being watched in focus. */
+  focus(peerId: string): void {
+    if (!this.watched.has(peerId)) return;
+    this.viewing = peerId;
+    this.onChange();
+  }
+
+  /** Stops watching one person; when it was the focused one, another one being watched takes the focus. */
+  removeView(peerId: string): void {
+    if (!this.watched.delete(peerId)) return;
+    if (peerId === this.selfId) {
+      if (this.viewing === peerId) this.viewing = this.watched.values().next().value ?? null;
+    } else {
+      this.pm.unwatch(peerId); // answers with onStream(null), which picks the next focus
+    }
+    this.onChange();
+  }
+
+  /** Stops watching everybody. */
+  stopViewing(): void {
+    for (const id of [...this.watched]) this.removeView(id);
+    this.viewing = null;
+    this.onChange();
+  }
+
+  private canWatch(peerId: string): boolean {
+    return peerId === this.selfId ? this.sharing : !!this.peers.get(peerId)?.share;
   }
 
   private local: MediaStream | null = null;
@@ -237,13 +282,14 @@ export class Session {
   sharedSourceId: string | null = null;
 
   async startSharing(sourceId: string, requested: ShareInfo): Promise<void> {
-    const info: ShareInfo = { ...requested, source: sourceId.startsWith('camera:') ? 'camera' : 'screen' };
+    const info: ShareInfo = { ...requested, source: sourceId.startsWith('camera:') ? 'camera' : 'screen', viewers: 0 };
     const stream = await this.capture(sourceId, info, () => playSound('self-share-start'));
     this.local = stream;
     this.sharedSourceId = sourceId;
     this.shareInfo = info;
     this.me().share = info;
     this.pm.startShare(stream, info);
+    if (!this.viewing) this.view(this.selfId); // nobody being watched: your own screen opens by itself
     this.onChange();
   }
 
@@ -274,8 +320,7 @@ export class Session {
       this.me().share = next;
       this.pm.announce(next);
     }
-    if (this.viewing === this.selfId) this.stream = stream; // the own preview follows the new picture
-    this.onChange();
+    this.onChange(); // the own preview follows the new picture (streamOf reads the local capture)
   }
 
   /** Asks for the capture of a screen or window and builds the stream (video + the audio without Discord when available). */
@@ -356,10 +401,7 @@ export class Session {
     this.audioNote = '';
     this.audioIsolated = false;
     this.me().share = null;
-    if (this.viewing === this.selfId) {
-      this.viewing = null;
-      this.stream = null;
-    }
+    this.removeView(this.selfId);
     if (!silent) playSound('self-share-stop'); // not when leaving the room: the leave sound covers that
     this.onChange();
   }

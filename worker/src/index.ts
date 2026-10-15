@@ -343,7 +343,7 @@ export class Room extends DurableObject<Env> {
     if (msg.type === 'share-started') {
       const s = msg.payload as ShareInfo | undefined;
       if (!s || typeof s.resolution !== 'string' || typeof s.fps !== 'number') return;
-      att.share = { resolution: s.resolution, fps: s.fps, mode: s.mode === 'detail' ? 'detail' : 'motion', source: s.source === 'camera' ? 'camera' : 'screen' };
+      att.share = { resolution: s.resolution, fps: s.fps, mode: s.mode === 'detail' ? 'detail' : 'motion', source: s.source === 'camera' ? 'camera' : 'screen', viewers: Number.isInteger(s.viewers) ? Math.min(Math.max(s.viewers as number, 0), 999) : 0 };
       this.save(ws, att);
       this.broadcast({ type: 'share-started', from: peerId, payload: att.share }, peerId);
       return;

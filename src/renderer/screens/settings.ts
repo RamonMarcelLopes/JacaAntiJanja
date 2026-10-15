@@ -1,5 +1,6 @@
 import { encodeCloudInvite } from '../../shared/invite';
-import { AppConfig, DEFAULT_PORT, Fps, Resolution, RoomStatus, ShareMode, UpdateState } from '../../shared/protocol';
+import { listCameras } from '../cameras';
+import { AppConfig, CaptureSource, DEFAULT_PORT, Fps, Resolution, RoomStatus, ShareMode, UpdateState } from '../../shared/protocol';
 import { h, toast } from '../dom';
 import { speakerSvg } from '../icons';
 import { deleteFixedRoom, editFixedRoom } from '../fixed-rooms';
@@ -531,6 +532,31 @@ export function renderSettings(ctx: SettingsContext): { el: HTMLElement; dispose
   drawMode();
   void refreshWorker();
 
+  // Default camera of the room's camera button. The list is read the first time the Câmera tab opens (listing may ask for the camera permission).
+  const cameraHolder = h('div', { class: 'camera-pick' });
+  const drawCameraSelect = (cameras: CaptureSource[] | null) => {
+    const saved = ctx.cfg.defaultCameraId;
+    const options: Array<[string, string]> = [['', 'Nenhuma escolhida']];
+    for (const c of cameras ?? []) options.push([c.id, c.name]);
+    if (saved && !options.some(([id]) => id === saved)) options.push([saved, cameras ? 'Câmera não encontrada' : 'Câmera escolhida']);
+    cameraHolder.replaceChildren(select<string>(saved, options, (v) => void ctx.update({ defaultCameraId: v })));
+  };
+  drawCameraSelect(null);
+  let camerasLoaded = false;
+  const loadCameraList = () => {
+    if (camerasLoaded) return;
+    camerasLoaded = true;
+    listCameras()
+      .then(async (list) => {
+        if (!ctx.cfg.defaultCameraId && list.length) await ctx.update({ defaultCameraId: list[0].id }); // the first camera is the default until another is picked
+        if (!settingsClosed) drawCameraSelect(list);
+      })
+      .catch(() => {
+        camerasLoaded = false;
+        toast('Não foi possível listar as câmeras.', 'error');
+      });
+  };
+
   const panels: Record<Category, HTMLElement> = {
     rede: redePanel,
     salas: h(
@@ -562,6 +588,7 @@ export function renderSettings(ctx: SettingsContext): { el: HTMLElement; dispose
       {},
       h('h2', {}, 'Câmera'),
       h('p', { class: 'muted' }, 'Padrões usados quando você compartilha a câmera. A tela e as janelas usam os da aba Transmissão. O codec é o mesmo para as duas.'),
+      field('Câmera padrão', cameraHolder, 'O ícone de câmera dentro da sala transmite direto essa câmera. Por padrão é a primeira que o Windows lista; troque aqui se não for a certa.'),
       field('Resolução padrão', select<Resolution>(cfg.cameraResolution, [['720p', '720p'], ['1080p', '1080p'], ['1440p', '1440p']], (v) => void ctx.update({ cameraResolution: v as Resolution })), 'Se a câmera não tiver essa resolução, o Windows usa a mais próxima.'),
       field('FPS padrão', select<number>(cfg.cameraFps, [[30, '30'], [60, '60']], (v) => void ctx.update({ cameraFps: Number(v) as Fps }))),
       field('Modo padrão', select<ShareMode>(cfg.cameraMode, [['motion', 'Movimento (rosto, gestos)'], ['detail', 'Detalhe (objetos, texto)']], (v) => void ctx.update({ cameraMode: v as ShareMode }))),
@@ -593,6 +620,7 @@ export function renderSettings(ctx: SettingsContext): { el: HTMLElement; dispose
       tab.tabIndex = key === id ? 0 : -1;
     }
     content.scrollTop = 0;
+    if (id === 'camera') loadCameraList();
   };
 
   const nav = h('nav', { class: 'settings-nav', role: 'tablist', 'aria-orientation': 'vertical', 'aria-label': 'Categorias das configurações' });

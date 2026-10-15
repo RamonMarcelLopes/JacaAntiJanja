@@ -32,6 +32,8 @@ export interface ShareInfo {
   fps: Fps;
   mode: ShareMode;
   source?: ShareSource;
+  /** How many people watch this share right now, kept up to date by the sharer. Older apps and servers do not send it. */
+  viewers?: number;
 }
 
 export interface PeerInfo {
@@ -170,6 +172,8 @@ export interface AppConfig {
   cameraResolution: Resolution;
   cameraFps: Fps;
   cameraMode: ShareMode;
+  /** Camera the room's camera button shares at once (`camera:<deviceId>`); empty until one is picked in Configurações > Câmera. */
+  defaultCameraId: string;
 }
 
 export interface AudioStartResult {

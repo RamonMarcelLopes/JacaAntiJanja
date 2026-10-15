@@ -32,7 +32,8 @@ export class PeerManager {
   private localInfo: ShareInfo | null = null;
   private statsTimer: number | null = null;
   private codec: AppConfig['codec'] = 'auto';
-  watching: string | null = null;
+  /** Everybody whose screen or camera this PC is watching right now (several at once). */
+  watching = new Set<string>();
 
   constructor(
     private sig: SignalingClient,
@@ -57,17 +58,18 @@ export class PeerManager {
   // ------------------------------------------------------------------ viewer side
 
   watch(peerId: string): void {
-    if (this.watching === peerId) return;
-    this.unwatch();
-    this.watching = peerId;
+    if (this.watching.has(peerId)) return;
+    this.watching.add(peerId);
     this.sig.send('watch', peerId);
   }
 
-  unwatch(): void {
-    if (!this.watching) return;
-    this.sig.send('unwatch', this.watching);
-    this.events.onStream(this.watching, null);
-    this.watching = null;
+  /** Stops watching one person, or everybody when no id is given. */
+  unwatch(peerId?: string): void {
+    for (const id of peerId ? [peerId] : [...this.watching]) {
+      if (!this.watching.delete(id)) continue;
+      this.sig.send('unwatch', id);
+      this.events.onStream(id, null);
+    }
   }
 
   // ------------------------------------------------------------------ sharer side
@@ -229,19 +231,13 @@ export class PeerManager {
   peerLeft(peerId: string): void {
     this.watchers.delete(peerId);
     this.events.onWatchersChanged(this.watchers.size);
-    if (this.watching === peerId) {
-      this.watching = null;
-      this.events.onStream(peerId, null);
-    }
+    if (this.watching.delete(peerId)) this.events.onStream(peerId, null);
     this.conns.get(peerId)?.pc.close();
     this.conns.delete(peerId);
   }
 
   peerStoppedSharing(peerId: string): void {
-    if (this.watching === peerId) {
-      this.watching = null;
-      this.events.onStream(peerId, null);
-    }
+    if (this.watching.delete(peerId)) this.events.onStream(peerId, null);
     const conn = this.conns.get(peerId);
     if (conn) conn.remoteStream = null;
   }
@@ -288,7 +284,7 @@ export class PeerManager {
         stream = conn.remoteStream;
       }
       conn.remoteStream = stream;
-      if (this.watching === peerId) this.events.onStream(peerId, stream);
+      if (this.watching.has(peerId)) this.events.onStream(peerId, stream);
     };
     pc.oniceconnectionstatechange = () => void window.jaca.log('sala', `ICE com ${peerId.slice(0, 4)}: ${pc.iceConnectionState}`);
     pc.onconnectionstatechange = () => {

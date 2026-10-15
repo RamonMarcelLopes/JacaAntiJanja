@@ -36,6 +36,7 @@ const DEFAULT_CONFIG: AppConfig = {
   cameraResolution: '720p',
   cameraFps: 30,
   cameraMode: 'motion',
+  defaultCameraId: '',
 };
 
 const ALLOWED_PERMISSIONS = new Set(['fullscreen', 'display-capture']);
@@ -113,6 +114,7 @@ function saveConfig(patch: Partial<AppConfig>): AppConfig {
   next.cameraResolution = next.cameraResolution === '1080p' || next.cameraResolution === '1440p' ? next.cameraResolution : '720p';
   next.cameraFps = next.cameraFps === 60 ? 60 : 30;
   next.cameraMode = next.cameraMode === 'detail' ? 'detail' : 'motion';
+  next.defaultCameraId = typeof next.defaultCameraId === 'string' && next.defaultCameraId.startsWith('camera:') ? next.defaultCameraId.slice(0, 300) : '';
   const port = Number(next.port);
   next.port = Number.isInteger(port) && port >= 1024 && port <= 65535 ? port : DEFAULT_PORT;
   fs.mkdirSync(path.dirname(configPath()), { recursive: true });

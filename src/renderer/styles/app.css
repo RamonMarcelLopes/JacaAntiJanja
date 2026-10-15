@@ -332,6 +332,82 @@ button.ghost:hover:not(:disabled) { color: var(--bone); border-color: var(--line
   background: var(--skin-deep) url('skin.svg') 0 0 / 60px 104px repeat;
   background-blend-mode: multiply;
 }
+.tiles {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center; /* a last row with fewer tiles sits in the middle, not against the left edge */
+  align-content: center;
+  container-type: size; /* lets the tiles size themselves from this box (cqw / cqh) */
+  gap: 12px;
+  padding: 14px; /* the call dock floats over the tiles, it takes no room of its own */
+  background: #0c0a07;
+}
+.tile {
+  position: relative;
+  /* a 16:9 rectangle as big as fits: limited by the width of its column and by the height of its row (container units of .tiles) */
+  flex: none;
+  aspect-ratio: 16 / 9;
+  width: min(calc((100cqw - (var(--cols, 1) - 1) * 12px) / var(--cols, 1)), calc((100cqh - (var(--rows, 1) - 1) * 12px) / var(--rows, 1) * 16 / 9));
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 16px;
+  overflow: hidden;
+  background: var(--skin-deep) url('skin.svg') 0 0 / 60px 104px repeat;
+  background-blend-mode: multiply;
+  animation: tile-in 0.3s ease-out both;
+}
+button.tile { padding: 0; border: 0; cursor: pointer; font: inherit; color: inherit; transition: transform 0.16s, box-shadow 0.16s; }
+.tile.live { box-shadow: 0 0 0 2px var(--ember); }
+button.tile:hover { transform: scale(1.015); box-shadow: 0 0 0 2px var(--ember), 0 8px 22px rgba(0, 0, 0, 0.45); }
+button.tile:active { transform: scale(0.99); }
+.video-holder { position: absolute; width: 0; height: 0; overflow: hidden; } /* videos not on screen keep playing in here */
+.tile-stop {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 2;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  border: 0;
+  background: rgba(12, 10, 7, 0.7);
+  color: var(--bone);
+  opacity: 0;
+  transition: opacity 0.16s, background 0.16s;
+}
+.tile:hover .tile-stop, .tile-stop:focus-visible { opacity: 1; }
+.tile-stop:hover { background: var(--ember); color: #fff; }
+.tile[role='button'] { cursor: pointer; }
+.player > video { cursor: pointer; } /* a click on the focused picture shows the grid with everyone */
+.tile.watching .avatar { display: none; }
+.tile.watching video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.tile.watching .tile-name, .tile.watching .tile-live { z-index: 1; }
+.tile-live { position: absolute; top: 10px; right: 10px; font-size: 11px; }
+@media (prefers-reduced-motion: reduce) { button.tile { transition: none; } }
+@keyframes tile-in { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: none; } }
+.tile .avatar { box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35); }
+.tile-name {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  max-width: calc(100% - 20px);
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: rgba(12, 10, 7, 0.68);
+  color: var(--bone);
+  font-weight: 600;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@media (prefers-reduced-motion: reduce) { .tile { animation: none; } }
 .player-bar {
   position: absolute;
   left: 0; right: 0; bottom: 0;
@@ -342,35 +418,73 @@ button.ghost:hover:not(:disabled) { color: var(--bone); border-color: var(--line
   padding: 36px 16px 14px;
   background: linear-gradient(transparent, rgba(12, 10, 7, 0.88));
 }
+/* call-style dock: speaker + camera + screen + leave */
+.empty-dock { position: absolute; left: 0; right: 0; bottom: 22px; z-index: 2; justify-content: center; }
+.call-dock {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px;
+  border-radius: 18px;
+  background: rgba(23, 19, 14, 0.72);
+  border: 1px solid rgba(232, 234, 217, 0.18);
+  backdrop-filter: blur(6px);
+  animation: dock-pop 0.28s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+}
+@keyframes dock-pop { from { opacity: 0; transform: translateY(10px) scale(0.94); } to { opacity: 1; transform: none; } }
+.dock-btn {
+  width: 46px;
+  height: 46px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 13px;
+  border: 0;
+  background: rgba(232, 234, 217, 0.1);
+  color: var(--bone);
+  transition: background 0.16s, transform 0.16s, filter 0.16s;
+}
+.dock-btn { position: relative; }
+.dock-btn:hover { background: rgba(232, 234, 217, 0.2); }
+/* small chevron badge in the corner of the camera and screen buttons (preview only, no menu behind it yet) */
+.dock-chev {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  background: #2a251d;
+  border: 1px solid rgba(232, 234, 217, 0.22);
+  color: var(--bone);
+}
+.dock-btn:active { transform: scale(0.94); }
+.dock-btn.dock-camera.on { background: rgba(80, 200, 100, 0.26); color: var(--ok); }
+.dock-btn.dock-camera.on:hover { background: rgba(80, 200, 100, 0.38); }
+.dock-btn.dock-screen.active { background: var(--ember); color: #fff; }
+.dock-btn.dock-screen.active:hover { background: var(--ember); filter: brightness(1.12); }
+.dock-btn.no-menu .dock-chev { opacity: 0.45; } /* still there, but it opens nothing while you are not looking at your own screen */
+.dock-chev.open { background: var(--husk); }
+.menu.dock-menu { z-index: 20; min-width: 160px; max-width: 300px; max-height: 134px; overflow-y: auto; transform-origin: bottom left; } /* 3 rows (40px each + padding), then a scroll */
+.dock-menu-item .mi-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.menu-item.dock-menu-item { flex: none; height: 40px; box-sizing: border-box; display: flex; flex-direction: row; align-items: center; gap: 12px; } /* .menu-item (later in the file) sets display: block */
+.dock-menu-item .mi-icon { display: grid; place-items: center; color: var(--bone-dim); }
+.dock-menu-item:hover .mi-icon, .dock-menu-item.open .mi-icon { color: var(--bone); }
+.dock-menu-item .mi-label { flex: 1; }
+.dock-menu-item .mi-val { color: var(--bone-dim); font-size: 13px; }
+.dock-menu-item .mi-check { color: var(--ok); }
+.dock-menu-item .mi-arrow { display: grid; place-items: center; color: var(--bone-dim); }
+.dock-menu-item.open { background: var(--husk); border-color: var(--line); }
+.dock-btn.dock-leave:hover { background: var(--ember); color: #fff; }
+@media (prefers-reduced-motion: reduce) { .call-dock { animation: none; } .dock-btn { transition: none; } }
 .pb-left { display: flex; align-items: center; min-width: 0; }
 .pb-right { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
-/* volume, fullscreen and the stop button only appear while the pointer is over the picture (or a control has keyboard focus) */
+/* volume, fullscreen and the call dock only appear while the pointer is over the picture (or a control has keyboard focus) */
 .pb-hover { opacity: 0; pointer-events: none; transition: opacity 0.18s; }
 .player:hover .pb-hover, .pb-hover:focus-within { opacity: 1; pointer-events: auto; }
-.player-bar .icon-btn.stop-btn {
-  width: 42px;
-  height: 42px;
-  border-radius: 50%;
-  background: rgba(23, 19, 14, 0.62);
-  color: var(--ember);
-  border: 1px solid rgba(255, 90, 54, 0.45);
-}
-.player-bar .icon-btn.stop-btn:hover:not(:disabled) { background: var(--ember); color: #fff; border-color: var(--ember); }
-.player:fullscreen .stop-btn { width: 52px; height: 52px; }
 .pb-center { display: flex; align-items: center; gap: 12px; }
-.player-bar .icon-btn.switch-btn {
-  width: 42px;
-  height: 42px;
-  border-radius: 50%;
-  background: rgba(23, 19, 14, 0.62);
-  color: var(--bone);
-  border: 1px solid rgba(232, 234, 217, 0.35);
-  transition: background 0.16s, border-color 0.16s, color 0.16s, transform 0.16s;
-}
-.player-bar .icon-btn.switch-btn:hover:not(:disabled) { background: var(--pod); color: var(--seed); border-color: var(--pod); }
-.player-bar .icon-btn.switch-btn:active:not(:disabled) { transform: scale(0.94); }
-.player:fullscreen .switch-btn { width: 52px; height: 52px; }
-@media (prefers-reduced-motion: reduce) { .player-bar .icon-btn.switch-btn { transition: none; } }
 .netinfo { position: relative; display: none; align-items: center; margin-right: 10px; padding: 2px; border-radius: 6px; color: rgba(255, 255, 255, 0.7); cursor: default; }
 .netinfo:hover, .netinfo:focus-visible { color: #fff; }
 .netinfo-tip {
@@ -399,7 +513,7 @@ button.ghost:hover:not(:disabled) { color: var(--bone); border-color: var(--line
 .player:fullscreen .player-bar { padding: 56px 32px 24px; gap: 14px; }
 .player:fullscreen .player-title { font-size: 20px; }
 .player-bar { transition: opacity 0.25s; }
-.player.idle { cursor: none; }
+.player.idle, .player.idle > video, .player.idle .tile { cursor: none; }
 .player.idle .player-bar { opacity: 0; pointer-events: none; }
 /* our own controls only: never the browser's native video UI */
 video::-webkit-media-controls, video::-webkit-media-controls-enclosure, video::-webkit-media-controls-panel { display: none !important; }
@@ -440,10 +554,31 @@ video::-webkit-media-controls, video::-webkit-media-controls-enclosure, video::-
 .volume:hover, .volume:focus-visible, .volume:active { --thumb: 14px; --thumb-offset: -5px; }
 .volume:hover::-webkit-slider-thumb, .volume:focus-visible::-webkit-slider-thumb, .volume:active::-webkit-slider-thumb { background: var(--pod); }
 .player:fullscreen .volume { width: 140px; }
-.viewers { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; padding: 0 8px; color: var(--bone-dim); font-weight: 600; cursor: default; }
+.viewers { display: inline-flex; align-items: center; gap: 4px; flex: none; color: var(--bone-dim); font-weight: 600; cursor: default; }
+.viewers svg { width: 14px; height: 14px; }
+.peer-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.peer-top .peer-name { flex: 1; min-width: 0; }
+.peer-side { flex: none; display: flex; flex-direction: row; align-items: center; gap: 8px; transition: opacity 0.15s; }
+/* the card keeps 40px free on the right for the three dots; AO VIVO reaches into it, ending 5px from the card's border */
+.peer-top .peer-side { margin-right: -34px; }
+.peer-row:hover .peer-side, .peer-row:focus-within .peer-side { opacity: 0; } /* the three dots take this corner while the card is hovered */
+@media (prefers-reduced-motion: reduce) { .peer-side { transition: none; } }
+.peer-side .viewers { font-size: 13px; }
 .viewers.has { color: var(--bone); }
 .viewers svg { flex: none; }
 .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; min-height: 44px; }
+.controls:empty { display: none; }
+.player > .controls {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 3;
+  min-height: 0;
+  padding: 6px 10px;
+  border-radius: 12px;
+  background: rgba(23, 19, 14, 0.7);
+  backdrop-filter: blur(6px);
+}
 
 .sidebar { border-left: 1px solid var(--line); background: var(--husk); padding: 18px 14px; overflow: auto; }
 .sidebar h2 { font-size: 16px; padding: 0 6px 10px; }
@@ -588,8 +723,8 @@ video::-webkit-media-controls, video::-webkit-media-controls-enclosure, video::-
 .share-dialog > * { flex: none; }
 .share-dialog > .source-viewport { flex: 1 1 auto; min-height: 0; }
 .source-viewport { overflow: hidden; border-radius: 12px; }
-.source-track { display: flex; width: 300%; height: 100%; transition: transform 0.34s cubic-bezier(0.4, 0, 0.2, 1); }
-.source-panel { flex: 0 0 33.3333%; min-width: 0; height: 100%; overflow-y: auto; padding: 4px; display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; align-content: start; }
+.source-track { display: flex; width: 200%; height: 100%; transition: transform 0.34s cubic-bezier(0.4, 0, 0.2, 1); }
+.source-panel { flex: 0 0 50%; min-width: 0; height: 100%; overflow-y: auto; padding: 4px; display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; align-content: start; }
 .source {
   display: grid;
   gap: 8px;
@@ -848,10 +983,6 @@ video::-webkit-media-controls, video::-webkit-media-controls-enclosure, video::-
 .dialog.profile-view .row { justify-self: stretch; }
 .dialog.profile-view { position: relative; padding-top: 36px; }
 .profile-view-close { position: absolute; top: 10px; right: 10px; }
-/* camera cards in the share dialog: an icon where the thumbnail of a screen would be */
-.source .cam-icon { width: 100%; aspect-ratio: 16 / 9; display: grid; place-items: center; border-radius: 10px; background: #0c0a07; color: var(--bone-dim); }
-.source.selected .cam-icon { color: var(--pod); }
-.share-dialog .seg.seg3 .seg-btn { padding: 7px 22px; font-size: inherit; }
 /* participants list: icon that tells a screen from a camera, before the quality text */
 .share-kind { display: inline-flex; vertical-align: -2px; margin-right: 5px; color: var(--ok); }
 .peer:disabled .share-kind { color: var(--ok); }

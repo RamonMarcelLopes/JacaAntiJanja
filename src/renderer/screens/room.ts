@@ -1,5 +1,6 @@
 import { AppConfig, BITRATE_MBPS, CaptureSource, Fps, MAX_FAVORITE_ROOMS, Resolution, RoomInfo, ShareInfo, ShareMode, ShareSource } from '../../shared/protocol';
 import { cropAvatar } from '../avatar-crop';
+import { listCameras } from '../cameras';
 import { avatarEl, dismiss, dismissOnBackdrop, h, toast } from '../dom';
 import { formatDuration } from '../../shared/time';
 import { speakerSvg } from '../icons';
@@ -18,18 +19,10 @@ export interface RoomContext {
 const EYE_SVG =
   '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>';
 
-// "Stop watching": a screen with an X in the middle.
-const SCREEN_X_SVG =
-  '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/><path d="M9.5 7.5l5 5M14.5 7.5l-5 5"/></svg>';
-
 const STAR_OFF_SVG =
   '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>';
 const STAR_ON_SVG =
   '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>';
-
-// "Switch the shared screen": a monitor with an arrow pointing right inside.
-const SCREEN_ARROW_SVG =
-  '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/><path d="M7 10h9M13 7l3 3-3 3"/></svg>';
 
 const FS_ENTER_SVG =
   '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>';
@@ -54,26 +47,9 @@ function uploadEstimate(info: ShareInfo, viewers: number): string {
   return `${viewers} espectador${viewers === 1 ? '' : 'es'} × ${BITRATE_MBPS[info.resolution][info.fps]} Mbps ≈ ${mbps.toFixed(1)} Mbps de upload`;
 }
 
-type SourceKind = 'screens' | 'windows' | 'cameras';
+type SourceKind = 'screens' | 'windows';
 /** Last known screens/windows with thumbnails: shown at once when the share dialog opens, then refreshed in the background. Cameras are only listed when their tab is opened. */
-const sourceCache: Record<SourceKind, CaptureSource[] | null> = { screens: null, windows: null, cameras: null };
-
-/**
- * The cameras of this PC. The names only show up once the camera was allowed, so when they come empty the camera is opened for an
- * instant (and closed again) to get the permission.
- */
-async function listCameras(): Promise<CaptureSource[]> {
-  let devices = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput');
-  if (devices.length && devices.some((d) => !d.label)) {
-    try {
-      (await navigator.mediaDevices.getUserMedia({ video: true })).getTracks().forEach((t) => t.stop());
-      devices = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput');
-    } catch {
-      /* not allowed (Windows privacy settings): the cameras are listed without names */
-    }
-  }
-  return devices.map((d, i) => ({ id: `camera:${d.deviceId}`, name: d.label || `Câmera ${i + 1}`, thumbnail: '', isScreen: false }));
-}
+const sourceCache: Record<SourceKind, CaptureSource[] | null> = { screens: null, windows: null };
 
 const SMALL_SCREEN_SVG =
   '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>';
@@ -88,8 +64,26 @@ function shareKindIcon(source: ShareSource | undefined): HTMLElement {
   return icon;
 }
 
-const CAMERA_SVG =
-  '<svg viewBox="0 0 24 24" width="44" height="44" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>';
+const DOCK_SVG_ATTRS = 'viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"';
+const DOCK_CHEVRON = `<span class="dock-chev" aria-hidden="true"><svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></span>`;
+/** Inner markup of the 24x24 stroke icons in the screen button's menus. */
+const MENU_ICONS = {
+  swap: '<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/><path d="M7 10h9M13 7l3 3-3 3"/>',
+  camera: '<path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/>',
+  quality: '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>',
+  resolution: '<path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3"/>',
+  fps: '<path d="M12 14l4-4"/><path d="M3.3 17a10 10 0 1 1 17.4 0"/>',
+  mode: '<path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>',
+  motion: '<path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>',
+  detail: '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>',
+} as const;
+const TILE_STOP_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+const MENU_ARROW_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>';
+const DOCK_CAMERA_SVG = `<svg ${DOCK_SVG_ATTRS}><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>${DOCK_CHEVRON}`;
+const DOCK_SCREEN_SVG = `<svg ${DOCK_SVG_ATTRS}><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/><path d="M10.5 7.5v5l4-2.5z" fill="currentColor"/></svg>${DOCK_CHEVRON}`;
+const DOCK_SCREEN_X_SVG = `<svg ${DOCK_SVG_ATTRS}><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/><path d="M9.5 7.5l5 5M14.5 7.5l-5 5"/></svg>${DOCK_CHEVRON}`;
+const DOCK_LEAVE_SVG = `<svg ${DOCK_SVG_ATTRS}><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 1.9.7 2.8a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.8.7a2 2 0 0 1 1.7 2z"/><path d="M16 2l6 6M22 2l-6 6"/></svg>`;
+
 let lastPrefetch = 0;
 
 /** Warms the cache (room open, mouse over the share button). Throttled; failures are ignored. */
@@ -106,7 +100,10 @@ export function renderRoom(ctx: RoomContext): { el: HTMLElement; dispose(): void
   let draft: ShareInfo = { resolution: cfg.resolution, fps: cfg.fps, mode: cfg.mode };
 
   // ---- player (kept alive across renders so playback is not interrupted)
-  const video = h('video', { autoplay: true, playsInline: true, disablePictureInPicture: true });
+  // One video per person being watched (several can be open at once). They live in `videoHolder` (hidden) until placed in the player or a tile.
+  const videos = new Map<string, HTMLVideoElement>();
+  const videoHolder = h('div', { class: 'video-holder' });
+  let volumeLevel = 1;
   const volume = h('input', { type: 'range', min: 0, max: 100, value: '100', class: 'volume', title: 'Volume' });
   // Speaker icon (click = mute / unmute), the slider and the percentage, grouped so they hide together on your own preview.
   const volumeBtn = h('button', { class: 'ghost icon-btn', title: 'Silenciar', 'aria-label': 'Silenciar' });
@@ -114,7 +111,8 @@ export function renderRoom(ctx: RoomContext): { el: HTMLElement; dispose(): void
   let volumeBeforeMute = 100;
   const applyVolume = () => {
     const v = Number(volume.value);
-    video.volume = v / 100;
+    volumeLevel = v / 100;
+    for (const video of videos.values()) video.volume = volumeLevel;
     volume.style.setProperty('--v', `${v}%`); // filled part of the custom slider
     volumePct.textContent = `${v}%`;
     volumeBtn.innerHTML = speakerSvg(v); // static markup, no user data
@@ -145,7 +143,22 @@ export function renderRoom(ctx: RoomContext): { el: HTMLElement; dispose(): void
     }
     void player.requestFullscreen?.();
   };
-  video.addEventListener('dblclick', toggleFullscreen);
+  // One click on the focused picture shows the grid; it waits a moment so a double click (fullscreen) does not also switch the view.
+  let clickTimer: number | undefined;
+  const makeVideo = (): HTMLVideoElement => {
+    const video = h('video', { autoplay: true, playsInline: true, disablePictureInPicture: true });
+    video.volume = volumeLevel;
+    video.addEventListener('dblclick', () => {
+      window.clearTimeout(clickTimer);
+      void toggleFullscreen();
+    });
+    video.addEventListener('click', () => {
+      if (gridMode) return; // in the grid the tile around the picture handles the click
+      window.clearTimeout(clickTimer);
+      clickTimer = window.setTimeout(() => setGridMode(true), 230);
+    });
+    return video;
+  };
   // Fullscreen is requested on the whole player (not just the video) so these controls stay visible and the
   // same button can leave fullscreen. The icon follows the real fullscreen state.
   const fsBtn = h('button', {
@@ -164,34 +177,321 @@ export function renderRoom(ctx: RoomContext): { el: HTMLElement; dispose(): void
     wake();
   };
   document.addEventListener('fullscreenchange', onFullscreenChange);
-  // Red icon-only "stop watching" button, centered at the bottom of the picture.
-  const stopBtn = h('button', {
-    class: 'icon-btn stop-btn',
-    title: 'Parar de assistir',
-    'aria-label': 'Parar de assistir',
-    onclick: () => session.stopViewing(),
-  });
-  stopBtn.innerHTML = SCREEN_X_SVG; // static markup, no user data
-  // "Switch the shared screen": next to the stop button, only while you are sharing
-  const switchBtn = h('button', {
-    class: 'icon-btn switch-btn',
-    title: 'Trocar a tela ou a câmera',
-    'aria-label': 'Trocar a tela ou a câmera',
-    onclick: () => openShareDialog(true),
-    onmouseenter: () => prefetchSources(),
-    onfocus: () => prefetchSources(),
-  });
-  switchBtn.innerHTML = SCREEN_ARROW_SVG; // static markup, no user data
-  // Three areas: who/what you are watching (left), the stop button (center) and volume + fullscreen (right).
+  // Three areas: who/what you are watching (left), the call dock (center) and volume + fullscreen (right).
   // All of them (.pb-hover) only show while the pointer is over the picture, so nothing covers the shared screen the rest of the time.
+  // Call-style dock (speaker, camera, screen, leave). Preview only: the buttons do nothing yet. It sits at the bottom of the green
+  // empty screen while nothing is open, and moves into the player bar while you watch or share.
+  const dockBtn = (cls: string, title: string, svg: string, onclick?: (e: MouseEvent) => void) => {
+    const b = h('button', { class: `dock-btn ${cls}`, title, 'aria-label': title, onclick, onmouseenter: prefetchSources, onfocus: prefetchSources });
+    b.innerHTML = svg; // static markup, no user data
+    return b;
+  };
+  // Camera button: shares the default camera (Configurações > Câmera) at once; pressing it again while the camera is shared stops it.
+  // Replacing a screen that is being shared asks first. Green only while your camera is the thing being shared.
+  const confirmReplaceScreen = () =>
+    new Promise<boolean>((resolve) => {
+      const done = (ok: boolean) => {
+        dismiss(overlay);
+        resolve(ok);
+      };
+      const overlay = h(
+        'div',
+        { class: 'overlay' },
+        h(
+          'div',
+          { class: 'dialog small', role: 'dialog', 'aria-label': 'Trocar a tela pela câmera' },
+          h('h2', {}, 'Trocar a tela pela câmera'),
+          h('p', {}, 'Você está compartilhando a tela. Se continuar, o compartilhamento da tela termina e a sua câmera passa a ser transmitida.'),
+          h('div', { class: 'row end' }, h('button', { class: 'ghost', onclick: () => done(false) }, 'Cancelar'), h('button', { class: 'primary', onclick: () => done(true) }, 'Trocar para a câmera')),
+        ),
+      );
+      dismissOnBackdrop(overlay, () => {
+        resolve(false);
+        return true;
+      });
+      document.body.append(overlay);
+    });
+  const cameraDockBtn = dockBtn('dock-camera', 'Câmera', DOCK_CAMERA_SVG, async (e) => {
+    if ((e.target as HTMLElement).closest('.dock-chev')) return toggleCameraMenu();
+    if (session.sharing && session.shareInfo?.source === 'camera') return void session.stopSharing();
+    try {
+      let id = ctx.cfg.defaultCameraId;
+      if (!id) {
+        // no default picked yet: the first camera found becomes the default (it can be changed in Configurações > Câmera)
+        id = (await listCameras())[0]?.id ?? '';
+        if (!id) return void toast('Nenhuma câmera encontrada. Confira se ela está ligada e liberada nas configurações de privacidade do Windows.', 'error');
+        await ctx.update({ defaultCameraId: id });
+      }
+      if (session.sharing) {
+        if (!(await confirmReplaceScreen())) return;
+        await session.switchSource(id);
+      } else {
+        await session.startSharing(id, { resolution: ctx.cfg.cameraResolution, fps: ctx.cfg.cameraFps, mode: ctx.cfg.cameraMode });
+      }
+    } catch (e: any) {
+      toast(`Não foi possível ligar a câmera: ${e?.message ?? e}`, 'error');
+    }
+  });
+  const leaveLabel =session.isHost ? 'Encerrar sala' : 'Sair';
+  // Screen button: opens the share dialog; while you share or watch it turns red with an X and ends that instead.
+  // Watching someone else's screen wins over your own share (you leave their screen first), otherwise your share ends.
+  // The chevron in its corner opens the cascading menu (Trocar tela / Qualidade) instead.
+  const screenDockBtn = dockBtn('dock-screen', 'Compartilhar tela', DOCK_SCREEN_SVG, (e) => {
+    if ((e.target as HTMLElement).closest('.dock-chev')) return toggleScreenMenu();
+    if (!gridMode && session.viewing && session.viewing !== session.selfId) session.stopViewing(); // in the grid there is no "stop watching" here: each tile has its own
+    else if (session.sharing && session.shareInfo?.source === 'camera') openShareDialog(true); // sharing the camera: this button picks a screen instead
+    else if (session.sharing) void session.stopSharing();
+    else if (session.viewing && !gridMode) session.stopViewing();
+    else openShareDialog();
+  });
+  let screenDockMode = '';
+  const drawScreenDock = (): void => {
+    const focused = !!session.viewing && !gridMode; // in the grid the button only deals with your own share
+    const watchingOther = focused && session.viewing !== session.selfId;
+    const sharingScreen = session.sharing && session.shareInfo?.source !== 'camera'; // a camera transmission leaves this button as it was
+    const mode = watchingOther ? 'stop-watching' : sharingScreen || (focused && !session.sharing) ? 'stop-sharing' : 'share';
+    if (mode === screenDockMode) return;
+    screenDockMode = mode;
+    const label = mode === 'stop-watching' ? 'Parar de assistir' : mode === 'stop-sharing' ? (session.sharing ? 'Parar de compartilhar' : 'Parar de assistir') : 'Compartilhar tela';
+    screenDockBtn.classList.toggle('active', mode !== 'share');
+    screenDockBtn.innerHTML = mode === 'share' ? DOCK_SCREEN_SVG : DOCK_SCREEN_X_SVG; // static markup, no user data
+    screenDockBtn.title = label;
+    screenDockBtn.setAttribute('aria-label', label);
+  };
+  // Cascading menu of the screen button: level 1 above the chevron (Trocar tela, Qualidade), level 2 to its right a little lower
+  // (Resolução, FPS, Modo), level 3 right beside level 2 at the same height (the choices). Choosing a value applies it to the share
+  // in progress, or becomes the default for the next one when nothing is being shared.
+  const QUALITY_ROWS: Array<{ key: 'resolution' | 'fps' | 'mode'; label: string; options: Array<[string | number, string]> }> = [
+    { key: 'resolution', label: 'Resolução', options: [['720p', '720p'], ['1080p', '1080p'], ['1440p', '1440p']] },
+    { key: 'fps', label: 'FPS', options: [[30, '30 fps'], [60, '60 fps']] },
+    { key: 'mode', label: 'Modo', options: [['motion', 'Movimento'], ['detail', 'Detalhe']] },
+  ];
+  let menuLevels: HTMLElement[] = [];
+  let closeScreenMenuListeners: (() => void) | null = null;
+  // Both menus (screen and camera) tune the share in progress, so they always read it from the session.
+  const currentQuality = (): ShareInfo => session.shareInfo ?? { resolution: ctx.cfg.resolution, fps: ctx.cfg.fps, mode: ctx.cfg.mode };
+  let menuOwner: HTMLElement | null = null; // the dock button whose chevron opened the menu
+  function closeScreenMenu(): void {
+    for (const m of menuLevels) dismiss(m);
+    menuLevels = [];
+    menuOwner?.querySelector('.dock-chev')?.classList.remove('open');
+    menuOwner = null;
+    closeScreenMenuListeners?.();
+    closeScreenMenuListeners = null;
+  }
+  function toggleScreenMenu(): void {
+    if (screenDockBtn.classList.contains('no-menu') && !menuLevels.length) return; // the menu is only for your own screen
+    toggleDockMenu(screenDockBtn, () => [
+      { label: 'Trocar tela', icon: MENU_ICONS.swap, onSelect: () => { closeScreenMenu(); openShareDialog(session.sharing); } },
+      { label: 'Qualidade', icon: MENU_ICONS.quality, sub: () => openQualityMenu() },
+    ]);
+  }
+  /** Camera chevron: "Mudar câmera" opens the list of cameras beside it; the picked one becomes the default (and is switched to at once if the camera is live). */
+  function toggleCameraMenu(): void {
+    toggleDockMenu(cameraDockBtn, () => [
+      { label: 'Mudar câmera', icon: MENU_ICONS.camera, sub: () => void openCameraListMenu() },
+      // the same quality choices as the screen's, for the camera transmission (only while it is live)
+      ...(session.sharing && session.shareInfo?.source === 'camera' ? [{ label: 'Qualidade', icon: MENU_ICONS.quality, sub: () => openQualityMenu() }] : []),
+    ]);
+  }
+  async function openCameraListMenu(): Promise<void> {
+    const parent = menuLevels[0];
+    const pr = parent.getBoundingClientRect();
+    const cameras = await listCameras().catch(() => []);
+    if (menuLevels[0] !== parent) return; // the menu was closed while the list loaded
+    const saved = ctx.cfg.defaultCameraId;
+    const rows: MenuRow[] = cameras.length
+      ? cameras.map((c) => ({
+          label: c.name,
+          icon: MENU_ICONS.camera,
+          checked: c.id === saved || (!saved && c === cameras[0]),
+          onSelect: () => {
+            closeScreenMenu();
+            void ctx.update({ defaultCameraId: c.id });
+            if (session.sharing && session.shareInfo?.source === 'camera' && session.sharedSourceId !== c.id) {
+              void session.switchSource(c.id).catch((e: any) => toast(`Não foi possível trocar de câmera: ${e?.message ?? e}`, 'error'));
+            }
+          },
+        }))
+      : [{ label: 'Nenhuma câmera encontrada', icon: MENU_ICONS.camera, onSelect: closeScreenMenu }];
+    openMenuLevel(1, rows, () => ({ left: pr.right + 6, top: pr.top })); // beside the first menu, same height
+  }
+  function toggleDockMenu(owner: HTMLElement, firstRows: () => MenuRow[]): void {
+    if (menuLevels.length) {
+      const same = menuOwner === owner;
+      closeScreenMenu();
+      if (same) return;
+    }
+    menuOwner = owner;
+    owner.querySelector('.dock-chev')?.classList.add('open');
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (menuLevels.some((m) => m.contains(t)) || menuOwner?.querySelector('.dock-chev')?.contains(t)) return;
+      closeScreenMenu();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeScreenMenu();
+    };
+    document.addEventListener('mousedown', onDown, true);
+    document.addEventListener('keydown', onKey, true);
+    closeScreenMenuListeners = () => {
+      document.removeEventListener('mousedown', onDown, true);
+      document.removeEventListener('keydown', onKey, true);
+    };
+    const chev = owner.querySelector('.dock-chev')!.getBoundingClientRect();
+    openMenuLevel(0, firstRows(), (menu) => ({ left: chev.left - 8, top: chev.top - 8 - menu.offsetHeight }));
+  }
+  type MenuRow = { label: string; icon: string; value?: string; checked?: boolean; onSelect?: () => void; sub?: (row: HTMLElement) => void };
+  /** Shows menu level `depth` (closing the deeper ones). `place` gets the built menu and returns where it goes. */
+  function openMenuLevel(depth: number, rows: MenuRow[], place: (menu: HTMLElement) => { left: number; top: number }): HTMLElement {
+    for (const m of menuLevels.splice(depth)) dismiss(m);
+    const menu = h('div', { class: 'menu dock-menu', role: 'menu' });
+    for (const r of rows) {
+      const row = h('button', { class: `menu-item dock-menu-item ${r.sub ? 'sub' : ''}`, role: 'menuitem' });
+      const icon = h('span', { class: 'mi-icon', 'aria-hidden': 'true' });
+      icon.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${r.icon}</svg>`; // static markup, no user data
+      row.append(icon, h('span', { class: 'mi-label' }, r.label));
+      if (r.value) row.append(h('span', { class: 'mi-val' }, r.value));
+      if (r.checked) row.append(h('span', { class: 'mi-check', 'aria-hidden': 'true' }, '✓'));
+      if (r.sub) {
+        const arrow = h('span', { class: 'mi-arrow', 'aria-hidden': 'true' }); // right-pointing chevron: this row opens another menu to its right
+        arrow.innerHTML = MENU_ARROW_SVG; // static markup, no user data
+        row.append(arrow);
+      }
+      row.onclick = () => {
+        if (r.sub) {
+          menu.querySelectorAll('.menu-item.open').forEach((x) => x.classList.remove('open'));
+          row.classList.add('open');
+          r.sub(row);
+        } else r.onSelect?.();
+      };
+      menu.append(row);
+    }
+    menu.style.visibility = 'hidden';
+    player.append(menu);
+    const pos = place(menu);
+    menu.style.left = `${Math.max(8, Math.min(pos.left, window.innerWidth - menu.offsetWidth - 8))}px`;
+    menu.style.top = `${Math.max(8, Math.min(pos.top, window.innerHeight - menu.offsetHeight - 8))}px`;
+    menu.style.visibility = '';
+    menuLevels[depth] = menu;
+    return menu;
+  }
+  function openQualityMenu(): void {
+    const parent = menuLevels[0];
+    const pr = parent.getBoundingClientRect();
+    const info = currentQuality();
+    const rows: MenuRow[] = QUALITY_ROWS.map((q) => ({
+      label: q.label,
+      icon: MENU_ICONS[q.key],
+      value: q.options.find(([v]) => v === info[q.key])?.[1],
+      sub: () => openChoiceMenu(q),
+    }));
+    // a little lower than the first menu (about 10% of its height), to the right of it
+    openMenuLevel(1, rows, () => ({ left: pr.right + 6, top: pr.top + pr.height * 0.1 }));
+  }
+  function openChoiceMenu(q: (typeof QUALITY_ROWS)[number]): void {
+    const parent = menuLevels[1];
+    const pr = parent.getBoundingClientRect();
+    const current = currentQuality()[q.key];
+    const rows: MenuRow[] = q.options.map(([v, label]) => ({
+      label,
+      icon: q.key === 'mode' ? (v === 'detail' ? MENU_ICONS.detail : MENU_ICONS.motion) : MENU_ICONS[q.key],
+      checked: v === current,
+      onSelect: () => {
+        if (session.sharing && session.shareInfo) void session.updateQuality({ ...session.shareInfo, [q.key]: v } as ShareInfo);
+        closeScreenMenu();
+      },
+    }));
+    openMenuLevel(2, rows, () => ({ left: pr.right + 6, top: pr.top })); // same height as the menu it came from
+  }
+  const dock = h(
+    'div',
+    { class: 'call-dock' },
+    cameraDockBtn,
+    screenDockBtn,
+    dockBtn('dock-leave', leaveLabel, DOCK_LEAVE_SVG, ctx.leave),
+  );
+  const emptyDock = h('div', { class: 'empty-dock' });
+  const pbCenter = h('div', { class: 'pb-center pb-hover' });
   const playerBar = h(
     'div',
     { class: 'player-bar' },
     h('div', { class: 'pb-left pb-hover' }, netInfo, playerTitle),
-    h('div', { class: 'pb-center pb-hover' }, stopBtn, switchBtn),
+    pbCenter,
     h('div', { class: 'pb-right pb-hover' }, volumeGroup, fsBtn),
   );
-  const player = h('div', { class: 'player' }, video, placeholder, playerBar);
+  // Nothing open: one scale-green tile per participant (photo in the middle, name at the bottom-left), like a call.
+  const tiles = h('div', { class: 'tiles' });
+  let tilesSig = '';
+  // While watching, a click on the picture shows everyone again (grid mode) with the watched person's live picture in place of their
+  // scales; clicking it again goes back to the focus view. Picking another person, or stopping, always returns to focus.
+  let gridMode = false;
+  let lastViewing: string | null = null;
+  const tileOf = new Map<string, HTMLElement>();
+  const setGridMode = (on: boolean): void => {
+    gridMode = on;
+    render();
+  };
+  const drawTiles = (): void => {
+    const peers = [...session.peers.values()];
+    const watchedIds = gridMode ? [...session.watched] : []; // in the grid every watched person shows their live picture
+    const sig = JSON.stringify([peers.map((p) => [p.peerId, p.name, p.avatar, !!p.share]), session.selfId, session.sharing, watchedIds.map((id) => [id, !!session.streamOf(id)])]);
+    if (sig === tilesSig) return;
+    tilesSig = sig;
+    tileOf.clear();
+    const cols = peers.length === 2 ? 1 : Math.max(1, Math.ceil(Math.sqrt(peers.length))); // two people sit one above the other
+    const size = peers.length <= 1 ? 140 : peers.length <= 4 ? 112 : 84; // photos are saved at 128 px, so they stay sharp
+    tiles.style.setProperty('--cols', String(cols));
+    tiles.style.setProperty('--rows', String(Math.max(1, Math.ceil(peers.length / cols))));
+    tiles.replaceChildren(
+      ...peers.map((p) => {
+        const isMe = p.peerId === session.selfId;
+        const live = !!p.share;
+        const clickable = live && (!isMe || session.sharing); // same rule as the participants list
+        const label = isMe ? `${p.name} (você)` : p.name;
+        const watched = watchedIds.includes(p.peerId);
+        const hasPicture = watched && !!session.streamOf(p.peerId);
+        const action = watched ? 'Colocar em foco' : isMe ? 'Ver prévia da sua tela' : `Assistir ${p.name}`;
+        // a watched tile holds a stop button, so it cannot be a button itself
+        const tile = h(
+          clickable && !watched ? 'button' : 'div',
+          {
+            class: `tile ${live ? 'live' : ''} ${hasPicture ? 'watching' : ''}`,
+            ...(clickable ? { title: action, 'aria-label': action } : {}),
+            ...(clickable && !watched ? { type: 'button' } : {}),
+            ...(watched ? { role: 'button', tabIndex: 0 } : {}),
+          },
+          avatarEl(p.name, p.avatar, size),
+          h('span', { class: 'tile-name' }, watched && !hasPicture ? `${label} · conectando...` : label),
+          live ? h('span', { class: 'badge-live tile-live' }, 'AO VIVO') : null,
+        );
+        if (watched) {
+          const focusIt = () => {
+            session.focus(p.peerId);
+            setGridMode(false);
+          };
+          tile.onclick = focusIt;
+          tile.onkeydown = (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              focusIt();
+            }
+          };
+          const stop = h('button', { class: 'tile-stop', type: 'button', title: 'Parar de assistir', 'aria-label': `Parar de assistir ${p.name}`, onclick: (e: MouseEvent) => {
+            e.stopPropagation();
+            session.removeView(p.peerId);
+          } });
+          stop.innerHTML = TILE_STOP_SVG; // static markup, no user data
+          tile.append(stop);
+        } else if (clickable) {
+          tile.onclick = () => session.addView(p.peerId); // one more picture, the ones already open stay
+        }
+        tileOf.set(p.peerId, tile);
+        return tile;
+      }),
+    );
+  };
+  const player = h('div', { class: 'player' }, videoHolder, placeholder, tiles, emptyDock, playerBar);
 
   // In fullscreen the controls (and the cursor) hide after a moment without mouse movement and come back on movement.
   let idleTimer: number | undefined;
@@ -227,7 +527,9 @@ export function renderRoom(ctx: RoomContext): { el: HTMLElement; dispose(): void
   const timerInterval = window.setInterval(tickTimer, 1000);
 
   const list = h('div', { class: 'peer-list' });
+  // Viewer count and audio note float over the corner of the picture, so they take no room and the picture keeps the same size
   const controls = h('div', { class: 'controls' });
+  player.append(controls);
   const root = h('div', { class: 'screen room' });
 
   const inviteCode = session.inviteCode; // every participant sees it, not only the host
@@ -330,9 +632,8 @@ export function renderRoom(ctx: RoomContext): { el: HTMLElement; dispose(): void
       h('span', { class: 'spacer' }),
       timer,
       settingsBtn,
-      h('button', { class: 'danger', onclick: ctx.leave }, session.isHost ? 'Encerrar sala' : 'Sair'),
     ),
-    h('main', { class: 'room-body' }, h('section', { class: 'stage' }, player, controls), h('aside', { class: 'sidebar' }, h('h2', {}, 'Participantes'), list)),
+    h('main', { class: 'room-body' }, h('section', { class: 'stage' }, player), h('aside', { class: 'sidebar' }, h('h2', {}, 'Participantes'), list)),
   );
 
   function peerCard(p: PeerView): HTMLElement {
@@ -352,7 +653,13 @@ export function renderRoom(ctx: RoomContext): { el: HTMLElement; dispose(): void
       h(
         'div',
         { class: 'peer-info' },
-        h('div', { class: 'peer-name' }, isMe ? `${p.name} (você)` : p.name),
+        // name on the left; on the right the number of people watching and AO VIVO (the count is not sent by older apps and servers)
+        h(
+          'div',
+          { class: 'peer-top' },
+          h('div', { class: 'peer-name' }, isMe ? `${p.name} (você)` : p.name),
+          live ? h('span', { class: 'peer-side' }, typeof p.share!.viewers === 'number' ? viewersBadge(p.share!.viewers) : null, h('span', { class: 'badge-live' }, 'AO VIVO')) : null,
+        ),
         h(
           'div',
           { class: 'peer-meta muted' },
@@ -362,7 +669,6 @@ export function renderRoom(ctx: RoomContext): { el: HTMLElement; dispose(): void
           !isMe && p.rtt !== null ? h('span', { class: 'meta-rtt' }, `${p.rtt} ms`) : null,
         ),
       ),
-      live ? h('span', { class: 'badge-live' }, 'AO VIVO') : null,
     );
     // Every card: a three-dot button inside the card's right edge opens the profile menu (visible on hover). It is a
     // sibling of the card button, positioned over it, because a button cannot sit inside another button.
@@ -519,21 +825,15 @@ export function renderRoom(ctx: RoomContext): { el: HTMLElement; dispose(): void
   /** `switching`: already sharing, the dialog only picks another screen or window (quality stays, the transmission is not interrupted). */
   function openShareDialog(switching = false): void {
     type Kind = SourceKind;
-    const kinds: Kind[] = ['screens', 'windows', 'cameras'];
+    const kinds: Kind[] = ['screens', 'windows'];
     // start from the cache (instant) and refresh in the background; screens and windows load independently, screens first
-    const lists: Record<Kind, CaptureSource[]> = { screens: sourceCache.screens ?? [], windows: sourceCache.windows ?? [], cameras: [] };
-    const loaded: Record<Kind, boolean> = { screens: sourceCache.screens !== null, windows: sourceCache.windows !== null, cameras: false };
+    const lists: Record<Kind, CaptureSource[]> = { screens: sourceCache.screens ?? [], windows: sourceCache.windows ?? [] };
+    const loaded: Record<Kind, boolean> = { screens: sourceCache.screens !== null, windows: sourceCache.windows !== null };
     let kind: Kind = 'screens';
     let chosen: string | null = lists.screens[0]?.id ?? null;
 
-    // Quality: screens and windows start from the Transmissão defaults, the camera from the Câmera defaults (Configurações).
-    // Changing between the two groups of tabs puts the defaults of the new group back in the dropdowns.
-    const defaultsFor = (k: Kind): ShareInfo =>
-      k === 'cameras'
-        ? { resolution: ctx.cfg.cameraResolution, fps: ctx.cfg.cameraFps, mode: ctx.cfg.cameraMode }
-        : { resolution: ctx.cfg.resolution, fps: ctx.cfg.fps, mode: ctx.cfg.mode };
-    let qualityGroup: 'screen' | 'camera' = 'screen';
-    draft = defaultsFor('screens');
+    // Quality starts from the Transmissão defaults (Configurações). The camera has its own menu on the camera button.
+    draft = { resolution: ctx.cfg.resolution, fps: ctx.cfg.fps, mode: ctx.cfg.mode };
     const qualityRow = h('div', { class: 'row wrap' });
     const drawQuality = () =>
       qualityRow.replaceChildren(
@@ -550,9 +850,8 @@ export function renderRoom(ctx: RoomContext): { el: HTMLElement; dispose(): void
     const panels: Record<Kind, HTMLElement> = {
       screens: h('div', { class: 'source-panel', role: 'tabpanel' }),
       windows: h('div', { class: 'source-panel', role: 'tabpanel' }),
-      cameras: h('div', { class: 'source-panel', role: 'tabpanel' }),
     };
-    const track = h('div', { class: 'source-track' }, panels.screens, panels.windows, panels.cameras);
+    const track = h('div', { class: 'source-track' }, panels.screens, panels.windows);
     const viewport = h('div', { class: 'source-viewport' }, track);
     const startLabel = switching ? 'Trocar' : 'Compartilhar';
     const startBtn = h('button', { class: 'primary' }, startLabel);
@@ -574,14 +873,7 @@ export function renderRoom(ctx: RoomContext): { el: HTMLElement; dispose(): void
         els = lists[k].map((src) => {
           let card = cards.get(src.id);
           if (!card) {
-            let picture: HTMLElement;
-            if (src.id.startsWith('camera:')) {
-              picture = h('div', { class: 'cam-icon' });
-              picture.innerHTML = CAMERA_SVG; // static markup, no user data
-            } else {
-              picture = h('img', { src: src.thumbnail, alt: '' });
-            }
-            card = h('button', { class: 'source', onclick: () => { chosen = src.id; refreshSelection(); } }, picture, h('span', {}, labelOf(src)));
+            card = h('button', { class: 'source', onclick: () => { chosen = src.id; refreshSelection(); } }, h('img', { src: src.thumbnail, alt: '' }), h('span', {}, labelOf(src)));
             card.dataset.id = src.id;
             cards.set(src.id, card);
           } else {
@@ -591,7 +883,7 @@ export function renderRoom(ctx: RoomContext): { el: HTMLElement; dispose(): void
           return card;
         });
       } else if (loaded[k]) {
-        els = [h('div', { class: 'source-empty muted' }, k === 'screens' ? 'Nenhuma tela encontrada.' : k === 'windows' ? 'Nenhuma janela aberta para compartilhar.' : 'Nenhuma câmera encontrada. Confira se ela está ligada e liberada nas configurações de privacidade do Windows.')];
+        els = [h('div', { class: 'source-empty muted' }, k === 'screens' ? 'Nenhuma tela encontrada.' : 'Nenhuma janela aberta para compartilhar.')];
       } else {
         els = skeletons();
       }
@@ -599,40 +891,13 @@ export function renderRoom(ctx: RoomContext): { el: HTMLElement; dispose(): void
       if (!same) panel.replaceChildren(...els);
     };
 
-    const seg = h('div', { class: 'seg seg3', role: 'tablist', 'aria-label': 'O que compartilhar' });
-    // the cameras are listed the first time their tab is opened (that may ask for the camera permission, so it is not done earlier)
-    const loadCameras = () => {
-      if (loaded.cameras) return;
-      listCameras()
-        .then((list) => {
-          sourceCache.cameras = list;
-          if (!overlay.isConnected) return;
-          lists.cameras = list;
-          loaded.cameras = true;
-          if (kind === 'cameras' && !list.some((src) => src.id === chosen)) chosen = list[0]?.id ?? null;
-          renderPanel('cameras');
-          refreshSelection();
-        })
-        .catch(() => {
-          if (!overlay.isConnected) return;
-          loaded.cameras = true;
-          renderPanel('cameras');
-          toast('Não foi possível listar as câmeras.', 'error');
-        });
-    };
+    const seg = h('div', { class: 'seg', role: 'tablist', 'aria-label': 'O que compartilhar' });
     const showKind = (k: Kind) => {
       kind = k;
       if (!lists[k].some((src) => src.id === chosen)) chosen = lists[k][0]?.id ?? null; // the selection always belongs to the visible tab
       const index = kinds.indexOf(k);
       seg.dataset.pos = String(index); // slides the highlight under the buttons
       track.style.transform = `translateX(${-(index * 100) / kinds.length}%)`; // swipes the lists
-      if (k === 'cameras') loadCameras();
-      const group = k === 'cameras' ? 'camera' : 'screen';
-      if (group !== qualityGroup) {
-        qualityGroup = group;
-        draft = defaultsFor(k);
-        drawQuality();
-      }
       for (const key of kinds) {
         const active = key === k;
         tabs.get(key)!.setAttribute('aria-selected', String(active));
@@ -641,7 +906,7 @@ export function renderRoom(ctx: RoomContext): { el: HTMLElement; dispose(): void
       }
       refreshSelection();
     };
-    for (const [k, label] of [['screens', 'Telas'], ['windows', 'Janelas'], ['cameras', 'Câmeras']] as Array<[Kind, string]>) {
+    for (const [k, label] of [['screens', 'Telas'], ['windows', 'Janelas']] as Array<[Kind, string]>) {
       const btn = h('button', { class: 'seg-btn', role: 'tab', onclick: () => showKind(k) }, label);
       tabs.set(k, btn);
       seg.append(btn);
@@ -660,7 +925,7 @@ export function renderRoom(ctx: RoomContext): { el: HTMLElement; dispose(): void
       h(
         'div',
         { class: 'dialog share-dialog' },
-        h('h2', {}, switching ? 'Trocar o que você compartilha' : 'Compartilhar tela ou câmera'),
+        h('h2', {}, switching ? 'Trocar a tela ou janela que você compartilha' : 'Compartilhar tela'),
         seg,
         viewport,
         switching ? null : qualityRow,
@@ -689,8 +954,8 @@ export function renderRoom(ctx: RoomContext): { el: HTMLElement; dispose(): void
     dismissOnBackdrop(overlay, () => !starting);
     document.body.append(overlay); // the dialog is on screen right away; the lists fill in below
 
-    // refresh in the background: screens (fast) and windows (slow) independently (the cameras load when their tab opens)
-    for (const k of kinds.filter((x): x is 'screens' | 'windows' => x !== 'cameras')) {
+    // refresh in the background: screens (fast) and windows (slow) independently
+    for (const k of kinds) {
       window.jaca
         .listSources(k)
         .then((list) => {
@@ -711,8 +976,8 @@ export function renderRoom(ctx: RoomContext): { el: HTMLElement; dispose(): void
     }
   }
 
-  /** Eye icon + number of people watching (far right of the controls). */
-  function viewersBadge(info: ShareInfo, count: number): HTMLElement {
+  /** Eye icon + number of people watching somebody, shown in that person's card of the participants list. */
+  function viewersBadge(count: number): HTMLElement {
     const label = count === 0 ? 'Ninguém assistindo' : `${count} espectador${count === 1 ? '' : 'es'}`;
     const badge = h('span', { class: `viewers ${count ? 'has' : ''}`, title: label, 'aria-label': label });
     badge.innerHTML = EYE_SVG; // static markup, no user data
@@ -721,22 +986,8 @@ export function renderRoom(ctx: RoomContext): { el: HTMLElement; dispose(): void
   }
 
   function drawControls(): void {
-    if (!session.sharing || !session.shareInfo) {
-      controls.replaceChildren(h('button', { class: 'primary', onclick: () => void openShareDialog(), onmouseenter: prefetchSources, onfocus: prefetchSources }, 'Compartilhar'));
-      return;
-    }
-    const info = session.shareInfo;
-    const change = (patch: Partial<ShareInfo>) => {
-      void session.updateQuality({ ...info, ...patch });
-    };
-    controls.replaceChildren(
-      h('button', { class: 'danger', onclick: () => session.stopSharing() }, 'Parar de compartilhar'),
-      selectOf<Resolution>(info.resolution, [['720p', '720p'], ['1080p', '1080p'], ['1440p', '1440p']], (v) => change({ resolution: v as Resolution })),
-      selectOf<number>(info.fps, [[30, '30 fps'], [60, '60 fps']], (v) => change({ fps: Number(v) as Fps })),
-      selectOf<ShareMode>(info.mode, [['motion', 'Movimento'], ['detail', 'Detalhe']], (v) => change({ mode: v as ShareMode })),
-      ...(session.audioNote ? [h('span', { class: 'muted' }, session.audioNote)] : []),
-      viewersBadge(info, session.watcherCount),
-    );
+    // starting a share is the screen button of the dock over the player; only the audio warning stays here
+    controls.replaceChildren(...(session.sharing && session.audioNote ? [h('span', { class: 'muted' }, session.audioNote)] : []));
   }
 
   function render(): void {
@@ -749,11 +1000,51 @@ export function renderRoom(ctx: RoomContext): { el: HTMLElement; dispose(): void
     }
 
     const viewing = session.viewing ? session.peers.get(session.viewing) : null;
-    if (video.srcObject !== session.stream) video.srcObject = session.stream;
-    video.muted = session.viewing === session.selfId || session.muteIncoming;
-    placeholder.style.display = session.stream ? 'none' : 'flex';
-    playerBar.style.display = session.viewing ? 'grid' : 'none';
-    switchBtn.style.display = session.sharing ? '' : 'none';
+    if (session.viewing !== lastViewing) {
+      lastViewing = session.viewing;
+      gridMode = false; // a different person (or none) always opens in focus
+      window.clearTimeout(clickTimer);
+    }
+    const showTiles = !session.viewing || gridMode;
+    placeholder.style.display = !session.stream && session.viewing && !gridMode ? 'flex' : 'none'; // with nothing open (or in the grid) the tiles show instead
+    tiles.style.display = showTiles ? 'flex' : 'none';
+    if (showTiles) drawTiles();
+    // One video per person being watched. In focus only the focused one is shown in the player (and heard); in the grid every one sits in
+    // its own tile. A video not on screen waits in the hidden holder, so it keeps playing. Moving a video element pauses it, so it is resumed.
+    for (const [id, v] of [...videos]) {
+      if (session.watched.has(id)) continue;
+      v.srcObject = null;
+      v.remove();
+      videos.delete(id);
+    }
+    for (const id of session.watched) {
+      let v = videos.get(id);
+      if (!v) {
+        v = makeVideo();
+        videos.set(id, v);
+        videoHolder.append(v);
+      }
+      const stream = session.streamOf(id);
+      if (v.srcObject !== stream) v.srcObject = stream;
+      v.muted = id === session.selfId || session.muteIncoming || (!gridMode && id !== session.viewing);
+      const host = gridMode ? ((stream && tileOf.get(id)) || videoHolder) : id === session.viewing ? player : videoHolder;
+      if (v.parentElement !== host) {
+        host.prepend(v);
+        void v.play().catch(() => undefined);
+      }
+    }
+    // The bar (who you watch, volume, fullscreen, and the dock inside it) is only for the focused picture; the grid has the dock on its own, always visible
+    const focusedView = !!session.viewing && !gridMode;
+    playerBar.style.display = focusedView ? 'grid' : 'none';
+    const dockHost = focusedView ? pbCenter : emptyDock;
+    if (dock.parentElement !== dockHost) dockHost.append(dock);
+    emptyDock.style.display = focusedView ? 'none' : 'flex';
+    drawScreenDock();
+    // Trocar tela / Qualidade belong to the owner of the transmission, and only show while looking at your own screen (not someone else's)
+    const ownMenu = session.sharing && session.shareInfo?.source !== 'camera' && session.viewing === session.selfId; // a camera transmission has its own menu on the camera button
+    screenDockBtn.classList.toggle('no-menu', !ownMenu);
+    if (!ownMenu && menuLevels.length) closeScreenMenu();
+    cameraDockBtn.classList.toggle('on', session.sharing && session.shareInfo?.source === 'camera');
     const ownPreview = !!viewing && viewing.peerId === session.selfId && !!session.shareInfo;
     netInfo.style.display = ownPreview ? 'inline-flex' : 'none';
     volumeGroup.style.display = ownPreview ? 'none' : ''; // you never listen to your own screen
@@ -795,7 +1086,7 @@ export function renderRoom(ctx: RoomContext): { el: HTMLElement; dispose(): void
       if (document.fullscreenElement === player) void document.exitFullscreen();
       session.onChange = () => undefined;
       session.onNotice = () => undefined;
-      video.srcObject = null;
+      for (const video of videos.values()) video.srcObject = null;
     },
   };
 }
