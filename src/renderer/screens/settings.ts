@@ -6,7 +6,7 @@ import { speakerSvg } from '../icons';
 import { deleteFixedRoom, editFixedRoom } from '../fixed-rooms';
 import { customSelect } from '../select';
 import { playSound, setDisabledSounds, setSoundVolume, SoundName } from '../sounds';
-import { currentState, onUpdateChange } from '../update-banner';
+import { currentState, isInRoom, onUpdateChange } from '../update-banner';
 
 export interface SettingsContext {
   cfg: AppConfig;
@@ -85,7 +85,7 @@ function updateTexts(st: UpdateState): string {
     case 'none':
       return 'Você está na versão mais recente.';
     case 'available':
-      return `A versão ${st.version} está disponível. Use o aviso no topo para atualizar.`;
+      return `Há uma atualização: a versão ${st.version} está disponível. Ela só é instalada quando você apertar o botão abaixo.`;
     case 'downloading':
       return `Baixando a versão ${st.version}... ${st.percent ?? 0}%`;
     case 'ready':
@@ -137,10 +137,16 @@ export function renderSettings(ctx: SettingsContext): { el: HTMLElement; dispose
   void window.jaca.getVersion().then((v) => (versionText.textContent = `Versão ${v}`));
   const updateText = h('div', { class: 'test-result muted' });
   const checkBtn = h('button', { onclick: () => void window.jaca.checkForUpdates() }, 'Verificar atualizações');
+  // Only while an update is waiting: installs it (the app restarts), unless a room is open
+  const installBtn = h('button', { class: 'primary', onclick: () => void window.jaca.installUpdate() });
   const drawUpdate = (st: UpdateState) => {
     updateText.textContent = updateTexts(st);
     updateText.className = `test-result ${st.status === 'error' ? 'bad' : 'muted'}`;
     checkBtn.disabled = st.status === 'checking' || st.status === 'downloading' || st.status === 'ready';
+    installBtn.style.display = st.status === 'available' ? '' : 'none';
+    installBtn.disabled = isInRoom();
+    installBtn.textContent = isInRoom() ? 'Saia da sala para instalar' : `Instalar a versão ${st.version ?? ''}`.trim();
+    installBtn.title = isInRoom() ? 'Atualizar reinicia o app: saia da sala primeiro.' : '';
   };
   drawUpdate(currentState());
   const unsubscribe = onUpdateChange(drawUpdate);
@@ -599,6 +605,7 @@ export function renderSettings(ctx: SettingsContext): { el: HTMLElement; dispose
       h('h2', {}, 'Sobre'),
       versionText,
       checkBtn,
+      installBtn,
       updateText,
       h(
         'div',

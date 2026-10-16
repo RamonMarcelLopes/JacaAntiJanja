@@ -153,6 +153,14 @@ interface Away {
   until: number;
 }
 
+/**
+ * A WebSocket attachment cannot be larger than 16384 bytes, and the photo of each person lives in it. A bigger photo used to make the join
+ * fail inside the Worker with no answer at all (the app then waited until its timeout). Up to this size the photo is kept as it is; a bigger
+ * one is dropped (the person shows with initials), and the app shrinks photos before sending so they normally fit.
+ */
+const MAX_AVATAR_CHARS = 12_000;
+const cleanAvatar = (v: unknown): string | null => (typeof v === 'string' && v.startsWith('data:image/') && v.length <= MAX_AVATAR_CHARS ? v : null);
+
 const toInfo = (a: Attachment): PeerInfo => ({ peerId: a.peerId!, name: a.name ?? '', avatar: a.avatar ?? null, share: a.share ?? null });
 
 function cleanRoomName(raw: unknown, hostName: string): string {
@@ -283,11 +291,17 @@ export class Room extends DurableObject<Env> {
       await this.ctx.storage.put('meta', meta);
       await this.ctx.storage.deleteAlarm();
     }
-    const avatar = typeof p.avatar === 'string' && p.avatar.startsWith('data:image/') ? p.avatar : null;
+    const avatar = cleanAvatar(p.avatar);
     const peerId = crypto.randomUUID().replace(/-/g, '').slice(0, 12);
     const resumeToken = p.canResume === true ? crypto.randomUUID().replace(/-/g, '') : undefined; // only clients that announce the feature get a place kept (older apps leave with a plain close)
     const me: Attachment = { ...att, peerId, name, avatar, share: null, isHost: att.create, resumeToken };
-    ws.serializeAttachment(me);
+    try {
+      ws.serializeAttachment(me);
+    } catch {
+      // never leave the person waiting in silence: without the photo the attachment always fits
+      me.avatar = null;
+      ws.serializeAttachment(me);
+    }
     if (resumeToken) await this.ctx.storage.put<Attachment>(RESUME_PREFIX + peerId, me);
     ws.send(
       JSON.stringify({
@@ -335,7 +349,7 @@ export class Room extends DurableObject<Env> {
       const name = typeof p.name === 'string' ? p.name.trim().slice(0, 24) : att.name ?? '';
       if (!name) return;
       att.name = name;
-      att.avatar = typeof p.avatar === 'string' && p.avatar.startsWith('data:image/') ? p.avatar : null;
+      att.avatar = cleanAvatar(p.avatar);
       this.save(ws, att);
       this.broadcast({ type: 'peer-updated', payload: { peerId, name: att.name, avatar: att.avatar } }, peerId);
       return;

@@ -114,7 +114,7 @@ export function renderHome(ctx: HomeContext): HTMLElement {
       }
       return true;
     } catch (e: any) {
-      void window.jaca.log('criar', `${e instanceof JoinError ? e.code : 'erro'}: ${String(e?.message ?? e)} (modo ${ctx.cfg.connectionMode})`);
+      void window.jaca.log('criar', `${e instanceof JoinError ? e.code : 'erro'}: ${String(e?.message ?? e)} (modo ${ctx.cfg.connectionMode})${e instanceof JoinError && e.detail ? ' | o que aconteceu: ' + e.detail : e?.stack ? ' | ' + String(e.stack).split('\n').slice(1, 3).join(' ') : ''}`);
       await window.jaca.closeRoom();
       if (!(e instanceof JoinError) && fixed && errorText(e) === 'FIXED_ROOM_BUSY') {
         // the fixed room still looks open (the app closed without ending it): reopen the same room, or open a temporary one instead
@@ -157,13 +157,13 @@ export function renderHome(ctx: HomeContext): HTMLElement {
       ctx.openRoom(session, null);
       return true;
     } catch (e: any) {
-      void window.jaca.log('entrar', `${e instanceof JoinError ? e.code : 'erro'}: ${String(e?.message ?? e)} (${invite.kind === 'cloud' ? 'Cloudflare, conta ' + invite.subdomain : 'direto'})`); // never the full code: it is a way into the room
+      void window.jaca.log('entrar', `${e instanceof JoinError ? e.code : 'erro'}: ${String(e?.message ?? e)} (${invite.kind === 'cloud' ? 'Cloudflare, conta ' + invite.subdomain : 'direto'})${e instanceof JoinError && e.detail ? ' | o que aconteceu: ' + e.detail : e?.stack ? ' | ' + String(e.stack).split('\n').slice(1, 3).join(' ') : ''}`); // never the full code: it is a way into the room
       let text = e instanceof JoinError ? (JOIN_ERROR_TEXT[e.code] ?? e.message) : String(e?.message ?? 'Falha ao entrar na sala.');
       if (e instanceof JoinError && (e.code === 'UNREACHABLE' || e.code === 'TIMEOUT') && invite.kind === 'cloud') {
         // find out whether this PC's network is the problem, instead of just saying it failed
         btn.textContent = 'Verificando...';
         const base = await window.jaca.workerWsBase(invite.subdomain);
-        text = base ? await diagnoseCloud(base, invite.subdomain) : UNREACHABLE_CLOUD_TEXT;
+        text = base ? await diagnoseCloud(base, invite.subdomain, e.code === 'TIMEOUT' ? 'TIMEOUT' : 'UNREACHABLE') : UNREACHABLE_CLOUD_TEXT;
       }
       void window.jaca.log('rede', `mensagem mostrada: ${text}`);
       toast(text, 'error');

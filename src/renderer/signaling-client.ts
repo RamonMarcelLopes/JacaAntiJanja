@@ -1,4 +1,5 @@
 import { ErrorCode, Message, MessageType, PeerInfo } from '../shared/protocol';
+import { fitAvatar } from './dom';
 
 export interface WelcomePayload {
   peerId: string;
@@ -15,9 +16,32 @@ export interface WelcomePayload {
 }
 
 export class JoinError extends Error {
+  /** What exactly happened (phase, times, close code), for the log and for the technical line of the error; never a key or a code. */
+  detail = '';
   constructor(public code: ErrorCode | 'UNREACHABLE' | 'TIMEOUT') {
     super(code);
   }
+}
+
+/** How long a join waits for the room's answer, per attempt. A Cloudflare join gets two attempts: the route to workers.dev sometimes takes seconds to open. */
+export const JOIN_WAIT_MS = 15_000;
+const CLOUD_JOIN_ATTEMPTS = 2;
+
+/**
+ * A server answer as it came, for the log: photos shortened to their size, the resume token and the invite code hidden (they are ways
+ * into a room), the rest untouched and cut at 700 characters.
+ */
+export function redact(raw: string): string {
+  return raw
+    .replace(/"avatar":"data:image\/[^"]*"/g, (m) => `"avatar":"<foto ${m.length} bytes>"`)
+    .replace(/"(resumeToken|token|key|inviteCode)":"[^"]*"/g, '"$1":"<oculto>"')
+    .slice(0, 700);
+}
+
+/** The network the browser reports (type, round trip, speed): one more clue in the log when a join is slow. */
+function networkHint(): string {
+  const c = (navigator as any).connection;
+  return `online ${navigator.onLine}${c ? `, rede ${c.effectiveType ?? '?'} rtt ${c.rtt ?? '?'} ms ${c.downlink ?? '?'} Mbps${c.saveData ? ' economia de dados' : ''}` : ''}`;
 }
 
 export const JOIN_ERROR_TEXT: Record<string, string> = {
@@ -73,21 +97,63 @@ export class SignalingClient {
 
   async connect(url: string, token: number, name: string, avatar: string | null, extra: { roomName?: string } = {}): Promise<WelcomePayload> {
     this.url = url;
-    this.identity = { name, avatar };
-    const { ws, welcome } = await this.openSocket(url, { token, name, avatar, canResume: true, ...(extra.roomName !== undefined ? { roomName: extra.roomName } : {}) });
-    this.peerId = welcome.peerId;
-    this.resumeToken = welcome.resumeToken ?? '';
-    this.logRoom(`conectado à sala (${this.isCloud ? 'Cloudflare' : 'direto'}${this.resumeToken ? ', retomada disponível' : ''})`);
-    this.adopt(ws);
-    return welcome;
+    // a photo bigger than the room server accepts would make it stay silent, so a smaller copy goes (see fitAvatar); the same copy is used to get back in
+    const sentAvatar = await fitAvatar(avatar);
+    this.identity = { name, avatar: sentAvatar };
+    const payload = { token, name, avatar: sentAvatar, canResume: true, ...(extra.roomName !== undefined ? { roomName: extra.roomName } : {}) };
+    // Cloudflare: when the room does not answer (nothing, not even "closed"), one more attempt before giving up; a clear answer (closed, full...) is final
+    // (not for the host creating a room: if the first attempt did reach the Worker, a second "create" would be refused because the host is already there)
+    const attempts = this.isCloud && !url.includes('create=1') ? CLOUD_JOIN_ATTEMPTS : 1;
+    const details: string[] = [];
+    let lastError: JoinError | null = null;
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      try {
+        const { ws, welcome } = await this.openSocket(url, payload, { kind: 'entrar', label: `entrada ${attempt}/${attempts}` });
+        this.peerId = welcome.peerId;
+        this.resumeToken = welcome.resumeToken ?? '';
+        this.logRoom(`conectado à sala (${this.isCloud ? 'Cloudflare' : 'direto'}${this.resumeToken ? ', retomada disponível' : ''}; ${welcome.peers.length} pessoa(s) na sala; tentativa ${attempt}/${attempts})`);
+        this.adopt(ws);
+        return welcome;
+      } catch (e) {
+        if (!(e instanceof JoinError)) throw e;
+        lastError = e;
+        details.push(`tentativa ${attempt}: ${e.detail || e.code}`);
+        const silent = e.code === 'TIMEOUT' || e.code === 'UNREACHABLE';
+        if (!silent || attempt === attempts) break;
+        void window.jaca.log('entrar', `sem resposta na tentativa ${attempt}/${attempts}; tentando de novo em 1 s`);
+        await sleep(1000);
+      }
+    }
+    lastError!.detail = details.join(' | ');
+    throw lastError!;
   }
 
-  /** Opens a socket, sends the join message and waits for the welcome. The socket is closed again when anything goes wrong. */
-  private openSocket(url: string, joinPayload: object): Promise<{ ws: WebSocket; welcome: WelcomePayload }> {
+  /**
+   * Opens a socket, sends the join message and waits for the welcome. The socket is closed again when anything goes wrong.
+   * Every step is written to the log (when the connection opened, what came back and how big, how it ended), because "timeout" alone
+   * does not say whether the connection never opened or the room never answered.
+   */
+  private openSocket(url: string, joinPayload: object, opts: { waitMs?: number; label?: string; kind?: 'entrar' | 'sala' } = {}): Promise<{ ws: WebSocket; welcome: WelcomePayload }> {
+    const waitMs = opts.waitMs ?? JOIN_WAIT_MS;
+    const label = opts.label ?? 'entrada';
+    const kind = opts.kind ?? 'sala';
+    const cloud = url.includes('/ws/');
+    let host = 'servidor direto';
+    if (cloud) {
+      try {
+        host = new URL(url).host; // the Worker address only: never the room id, the token or the key that the url may carry
+      } catch {
+        host = 'endereço inválido';
+      }
+    }
     return new Promise((resolve, reject) => {
+      const t0 = performance.now();
+      const ms = () => Math.round(performance.now() - t0);
+      const log = (text: string) => void window.jaca.log(kind, `${label}: ${text}`);
+      let openedAt = 0;
       let settled = false;
       let ws: WebSocket;
-      const fail = (e: JoinError) => {
+      const fail = (code: JoinError['code'], why: string) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
@@ -97,31 +163,51 @@ export class SignalingClient {
         } catch {
           /* ignore */
         }
+        const e = new JoinError(code);
+        e.detail = `${why} [${host}, ${ms()} ms, ${networkHint()}]`;
+        log(`falhou (${code}): ${e.detail}`);
         reject(e);
       };
+      log(`conectando a ${host} (espera até ${waitMs / 1000} s; ${networkHint()})`);
       try {
         ws = new WebSocket(url);
-      } catch {
-        reject(new JoinError('UNREACHABLE'));
+      } catch (err: any) {
+        const e = new JoinError('UNREACHABLE');
+        e.detail = `não foi possível criar a conexão: ${err?.message ?? err}`;
+        log(`falhou (UNREACHABLE): ${e.detail}`);
+        reject(e);
         return;
       }
-      const timer = setTimeout(() => fail(new JoinError('TIMEOUT')), 7000);
-      ws.onopen = () => ws.send(JSON.stringify({ type: 'join', to: null, payload: joinPayload }));
-      ws.onerror = () => fail(new JoinError('UNREACHABLE'));
-      ws.onclose = () => fail(new JoinError('UNREACHABLE'));
+      const timer = setTimeout(
+        () => fail('TIMEOUT', openedAt ? `a conexão abriu em ${openedAt} ms, mas a sala não respondeu em ${waitMs / 1000} s` : `a conexão nem chegou a abrir em ${waitMs / 1000} s`),
+        waitMs,
+      );
+      ws.onopen = () => {
+        openedAt = ms();
+        log(`conexão aberta em ${openedAt} ms; enviando o pedido de entrada`);
+        ws.send(JSON.stringify({ type: 'join', to: null, payload: joinPayload }));
+      };
+      ws.onerror = (ev) => {
+        log(`evento de erro da conexão: ${(ev as ErrorEvent).message || 'sem mensagem (o navegador não dá detalhes)'}; tipo ${ev.type}; estado ${ws.readyState} (0 conectando, 1 aberta, 2 fechando, 3 fechada); ${openedAt ? `aberta em ${openedAt} ms` : 'nunca abriu'}`);
+        fail('UNREACHABLE', openedAt ? 'erro depois de abrir a conexão' : 'a conexão falhou antes de abrir');
+      };
+      ws.onclose = (ev) => fail('UNREACHABLE', `a conexão fechou antes da resposta (código ${ev.code}, motivo "${ev.reason}", limpa ${ev.wasClean}${openedAt ? `, aberta em ${openedAt} ms` : ', nunca abriu'})`);
       ws.onmessage = (ev) => {
+        const raw = String(ev.data);
         let msg: Message;
         try {
-          msg = JSON.parse(String(ev.data));
+          msg = JSON.parse(raw);
         } catch {
+          log(`resposta que não é JSON (${raw.length} bytes) em ${ms()} ms`);
           return;
         }
+        log(`resposta "${msg.type}"${msg.type === 'error' ? ` (${msg.payload?.code})` : ''}, ${raw.length} bytes, em ${ms()} ms; conteúdo: ${redact(raw)}`);
         if (msg.type === 'welcome') {
           settled = true;
           clearTimeout(timer);
           resolve({ ws, welcome: msg.payload as WelcomePayload });
         } else if (msg.type === 'error') {
-          fail(new JoinError(msg.payload?.code ?? 'BAD_REQUEST'));
+          fail((msg.payload?.code ?? 'BAD_REQUEST') as JoinError['code'], `a sala respondeu ${msg.payload?.code ?? 'erro'}`);
         }
       };
     });
@@ -141,6 +227,8 @@ export class SignalingClient {
         return;
       }
       if (msg.type === 'room-closed') this.closedByRoom = true;
+      // everything that comes in is in the log too, except network candidates and the descriptions of connections (big): only their size
+      if (msg.type !== 'ice') this.logRoom(`recebido ${msg.type}${msg.from ? ' de ' + msg.from.slice(0, 4) : ''}: ${msg.type === 'offer' || msg.type === 'answer' ? `${String(ev.data).length} bytes` : redact(String(ev.data))}`);
       this.onMessage(msg);
     };
     ws.onerror = () => {
@@ -225,7 +313,14 @@ export class SignalingClient {
   }
 
   send(type: MessageType, to: string | null, payload: unknown = {}): void {
-    if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ type, to, payload }));
+    if (this.ws?.readyState !== WebSocket.OPEN) {
+      if (type !== 'ice') this.logRoom(`não enviei "${type}": a conexão com a sala não está aberta (estado ${this.ws?.readyState ?? 'sem conexão'})`);
+      return;
+    }
+    const raw = JSON.stringify({ type, to, payload });
+    this.ws.send(raw);
+    // everything that goes out is in the log, except the stream of network candidates (hundreds per connection)
+    if (type !== 'ice') this.logRoom(`enviado ${type}${to ? ' para ' + to.slice(0, 4) : ''}: ${type === 'offer' || type === 'answer' ? `${raw.length} bytes` : redact(raw)}`);
   }
 
   private stopKeepAlive(): void {

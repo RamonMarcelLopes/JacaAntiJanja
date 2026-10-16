@@ -271,6 +271,13 @@ test('a Worker published with the button: pasting its address with no key makes 
     expect(JSON.stringify(cfg)).not.toContain('"key"');
     await expect.poll(() => readConfig(a).connectionMode).toBe('cloudflare');
 
+    // pressing "Salvar e testar" again with the field still empty only tests the saved key: no new key, no "já tem um dono"
+    const savedKey = readConfig(a).workerOwnerKeyEnc;
+    await a.page.getByRole('button', { name: 'Salvar e testar' }).click();
+    await expect(a.page.getByText('A chave guardada neste PC está valendo.')).toBeVisible({ timeout: 20_000 });
+    await expect(a.page.getByText('Esse Worker já tem um dono')).toHaveCount(0);
+    expect(readConfig(a).workerOwnerKeyEnc).toBe(savedKey);
+
     // another PC pointing at the same Worker cannot take it over
     await openRede(b);
     await b.page.getByRole('radio', { name: 'Cloudflare' }).click();

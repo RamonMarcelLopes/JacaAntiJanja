@@ -3,6 +3,11 @@ import { SignalingClient } from '../signaling-client';
 
 export type Quality = 'good' | 'ok' | 'bad' | 'unknown';
 
+/** One line in jaca.log about the transmission. `errText` writes an error as it really is (name, message, first line of the stack), not a paraphrase. */
+const tlog = (text: string) => void window.jaca.log('transmissao', text);
+export const errText = (e: any): string => `${e?.name ?? 'Erro'}: ${e?.message ?? e}${e?.stack ? ' @ ' + String(e.stack).split('\n')[1]?.trim() : ''}`;
+const who = (id: string) => id.slice(0, 4);
+
 export interface PeerManagerEvents {
   onStream(peerId: string, stream: MediaStream | null): void;
   onQuality(peerId: string, quality: Quality, rttMs: number | null): void;
@@ -23,6 +28,9 @@ interface Conn {
   lastReceived: number;
   lastSendLog: number;
   lastBytesSent: number;
+  lastRecvLog: number;
+  lastQuality: Quality;
+  lastStatsError: number;
 }
 
 const ICE_SERVERS: RTCIceServer[] = [{ urls: 'stun:stun.l.google.com:19302' }];
@@ -62,6 +70,7 @@ export class PeerManager {
   watch(peerId: string): void {
     if (this.watching.has(peerId)) return;
     this.watching.add(peerId);
+    tlog(`pedi para assistir ${who(peerId)} (assistindo ${this.watching.size} no total)`);
     this.sig.send('watch', peerId);
   }
 
@@ -69,6 +78,7 @@ export class PeerManager {
   unwatch(peerId?: string): void {
     for (const id of peerId ? [peerId] : [...this.watching]) {
       if (!this.watching.delete(id)) continue;
+      tlog(`parei de assistir ${who(id)} (restam ${this.watching.size})`);
       this.sig.send('unwatch', id);
       this.events.onStream(id, null);
     }
@@ -79,6 +89,7 @@ export class PeerManager {
   startShare(stream: MediaStream, info: ShareInfo): void {
     this.local = stream;
     this.localInfo = info;
+    tlog(`comecei a transmitir: ${info.source ?? 'screen'} ${info.resolution} ${info.fps} fps ${info.mode}; faixas ${stream.getTracks().map((t) => `${t.kind}(${t.readyState}${t.label ? ', ' + t.label.slice(0, 40) : ''})`).join(', ')}; codec preferido ${this.codec}`);
     this.sig.send('share-started', null, info);
   }
 
@@ -89,8 +100,9 @@ export class PeerManager {
     const video = this.local.getVideoTracks()[0];
     if (video) {
       video.contentHint = info.mode === 'detail' ? 'detail' : 'motion';
-      await video.applyConstraints(constraints).catch(() => undefined);
+      await video.applyConstraints(constraints).catch((e) => tlog(`não consegui aplicar a nova qualidade na captura: ${errText(e)}`));
     }
+    tlog(`qualidade alterada: ${info.resolution} ${info.fps} fps ${info.mode}`);
     for (const conn of this.conns.values()) for (const s of conn.senders) await this.applyParams(s);
     this.sig.send('share-started', null, info);
   }
@@ -113,7 +125,7 @@ export class PeerManager {
       for (const track of stream.getTracks()) {
         const sender = conn.senders.find((s) => kindOf(conn, s) === track.kind);
         if (sender) {
-          void sender.replaceTrack(track).catch(() => undefined);
+          void sender.replaceTrack(track).catch((e) => tlog(`não consegui trocar a faixa ${track.kind}: ${errText(e)}`));
         } else {
           // the old capture had no track of this kind (a camera has no audio, a screen does): a new one is added, which renegotiates
           const added = conn.pc.addTrack(track, conn.sendStream ?? stream);
@@ -123,13 +135,14 @@ export class PeerManager {
       }
       for (const sender of conn.senders) {
         const kind = kindOf(conn, sender);
-        if (kind && !stream.getTracks().some((t) => t.kind === kind)) void sender.replaceTrack(null).catch(() => undefined); // the new capture has none: the old track must not linger
+        if (kind && !stream.getTracks().some((t) => t.kind === kind)) void sender.replaceTrack(null).catch((e) => tlog(`não consegui retirar a faixa ${kind}: ${errText(e)}`)); // the new capture has none: the old track must not linger
       }
     }
   }
 
   stopShare(): void {
     if (!this.local) return;
+    tlog(`parei de transmitir (${this.watchers.size} espectador(es) conectado(s))`);
     for (const id of this.watchers) this.removeTracksFrom(id);
     this.local.getTracks().forEach((t) => t.stop());
     this.local = null;
@@ -143,6 +156,7 @@ export class PeerManager {
     if (!this.local) return;
     const conn = this.ensure(peerId);
     if (conn.senders.length) return;
+    tlog(`${who(peerId)} quer assistir: enviando ${this.local.getTracks().map((t) => t.kind).join(' + ')}`);
     conn.sendStream = this.local;
     for (const track of this.local.getTracks()) {
       const sender = conn.pc.addTrack(track, this.local);
@@ -161,8 +175,8 @@ export class PeerManager {
     for (const s of conn.senders) {
       try {
         conn.pc.removeTrack(s);
-      } catch {
-        /* connection already closed */
+      } catch (e) {
+        tlog(`não consegui retirar uma faixa da conexão com ${who(peerId)} (provavelmente já fechada): ${errText(e)}`);
       }
     }
     conn.senders = [];
@@ -174,12 +188,16 @@ export class PeerManager {
     const caps = RTCRtpSender.getCapabilities('video');
     if (!caps) return;
     const preferred = caps.codecs.filter((c) => c.mimeType.toLowerCase() === mime.toLowerCase());
-    if (!preferred.length) return;
+    if (!preferred.length) {
+      tlog(`o codec ${mime} que você escolheu não existe neste PC; ficou o automático (disponíveis: ${[...new Set(caps.codecs.map((c) => c.mimeType))].join(', ')})`);
+      return;
+    }
     const rest = caps.codecs.filter((c) => !preferred.includes(c));
     try {
       tr.setCodecPreferences([...preferred, ...rest]);
-    } catch {
-      /* unsupported combination, keep defaults */
+      tlog(`codec ${mime} colocado em primeiro lugar`);
+    } catch (e) {
+      tlog(`não consegui preferir o codec ${mime}; ficou o automático: ${errText(e)}`);
     }
   }
 
@@ -196,8 +214,8 @@ export class PeerManager {
       params.encodings[0].priority = 'high';
       (params as any).degradationPreference = info.mode === 'detail' ? 'maintain-resolution' : 'maintain-framerate';
       await sender.setParameters(params);
-    } catch {
-      /* parameters may not be settable before negotiation; re-applied on connect */
+    } catch (e) {
+      tlog(`não consegui aplicar bitrate/fps ao envio (volto a tentar quando conectar): ${errText(e)}`);
     }
   }
 
@@ -262,6 +280,9 @@ export class PeerManager {
       lastReceived: 0,
       lastSendLog: 0,
       lastBytesSent: 0,
+      lastRecvLog: 0,
+      lastQuality: 'unknown',
+      lastStatsError: 0,
     };
     this.conns.set(peerId, conn);
 
@@ -270,8 +291,8 @@ export class PeerManager {
         conn.makingOffer = true;
         await pc.setLocalDescription();
         this.sig.send('offer', peerId, { sdp: pc.localDescription });
-      } catch {
-        /* a collision will be resolved by perfect negotiation */
+      } catch (e) {
+        tlog(`falha ao criar a oferta para ${who(peerId)} (uma colisão se resolve sozinha): ${errText(e)}`);
       } finally {
         conn.makingOffer = false;
       }
@@ -288,9 +309,13 @@ export class PeerManager {
         stream = conn.remoteStream;
       }
       conn.remoteStream = stream;
+      tlog(`recebi uma faixa ${e.track.kind} de ${who(peerId)} (estado ${e.track.readyState}, ${stream.getTracks().length} faixa(s) no fluxo, ${this.watching.has(peerId) ? 'estou assistindo' : 'não estou assistindo'})`);
       if (this.watching.has(peerId)) this.events.onStream(peerId, stream);
     };
     pc.oniceconnectionstatechange = () => void window.jaca.log('sala', `ICE com ${peerId.slice(0, 4)}: ${pc.iceConnectionState}`);
+    pc.onicegatheringstatechange = () => void window.jaca.log('sala', `coleta de candidatos com ${peerId.slice(0, 4)}: ${pc.iceGatheringState}`);
+    pc.onicecandidateerror = (e: any) => void window.jaca.log('sala', `erro ao buscar candidato com ${peerId.slice(0, 4)}: código ${e.errorCode} "${e.errorText}" servidor ${String(e.url ?? '').split('?')[0]}`);
+    pc.onsignalingstatechange = () => void window.jaca.log('sala', `negociação com ${peerId.slice(0, 4)}: ${pc.signalingState}`);
     pc.onconnectionstatechange = () => {
       void window.jaca.log('sala', `conexão WebRTC com ${peerId.slice(0, 4)}: ${pc.connectionState}`);
       if (pc.connectionState === 'failed') {
@@ -315,7 +340,8 @@ export class PeerManager {
         await pc.setLocalDescription();
         this.sig.send('answer', from, { sdp: pc.localDescription });
       }
-    } catch {
+    } catch (e) {
+      tlog(`falha ao processar a ${description.type === 'offer' ? 'oferta' : 'resposta'} de ${who(from)}: ${errText(e)}`);
       this.events.onConnectionFailed(from);
     }
   }
@@ -325,7 +351,8 @@ export class PeerManager {
     if (!conn || !candidate) return;
     try {
       await conn.pc.addIceCandidate(candidate);
-    } catch {
+    } catch (e) {
+      tlog(`candidato de rede de ${who(from)} recusado${conn.ignoreOffer ? ' (oferta ignorada de propósito)' : ''}: ${errText(e)}`);
       if (!conn.ignoreOffer) this.events.onConnectionFailed(from);
     }
   }
@@ -352,6 +379,17 @@ export class PeerManager {
     );
   }
 
+  /** The receiving side of the same story: every 10 s while watching, what arrives (real fps, size, lost packets, freezes, decoder). */
+  private logReceiving(peerId: string, conn: Conn, report: RTCStatsReport, s: any): void {
+    const now = performance.now();
+    if (conn.lastRecvLog && now - conn.lastRecvLog < 10_000) return;
+    conn.lastRecvLog = now;
+    const codec = (report.get(s.codecId) as any)?.mimeType ?? '?';
+    tlog(
+      `recebendo de ${who(peerId)}: ${codec} · decodificador ${s.decoderImplementation ?? '?'}${s.powerEfficientDecoder ? ' (hardware)' : ''} · ${s.frameWidth ?? '?'}x${s.frameHeight ?? '?'} ${Math.round(s.framesPerSecond ?? 0)} fps · pacotes perdidos ${s.packetsLost ?? 0} · jitter ${Math.round((s.jitter ?? 0) * 1000)} ms · congelamentos ${s.freezeCount ?? 0} (${Math.round(s.totalFreezesDuration ?? 0)} s) · quadros descartados ${s.framesDropped ?? 0}`,
+    );
+  }
+
   private async pollStats(): Promise<void> {
     for (const [id, conn] of this.conns) {
       if (conn.pc.connectionState !== 'connected') continue;
@@ -362,6 +400,7 @@ export class PeerManager {
         let received = 0;
         report.forEach((s: any) => {
           if (s.type === 'outbound-rtp' && s.kind === 'video') this.logSending(id, conn, report, s);
+          if (s.type === 'inbound-rtp' && s.kind === 'video') this.logReceiving(id, conn, report, s);
           if (s.type === 'candidate-pair' && s.nominated && typeof s.currentRoundTripTime === 'number') rtt = s.currentRoundTripTime * 1000;
           if (s.type === 'inbound-rtp') {
             lost += s.packetsLost ?? 0;
@@ -382,8 +421,16 @@ export class PeerManager {
         else if (rtt > 250 || lossPct > 5) q = 'bad';
         else if (rtt > 120 || lossPct > 1.5) q = 'ok';
         this.events.onQuality(id, q, rtt === null ? null : Math.round(rtt));
-      } catch {
-        /* peer connection closed during polling */
+        if (q !== conn.lastQuality) {
+          tlog(`qualidade da conexão com ${who(id)}: ${conn.lastQuality} → ${q} (ida e volta ${rtt === null ? '?' : Math.round(rtt) + ' ms'}, perda ${lossPct.toFixed(1)}%)`);
+          conn.lastQuality = q;
+        }
+      } catch (e) {
+        // the connection closing during the poll is normal; anything else is worth a line (at most one per 30 s per person)
+        if (performance.now() - conn.lastStatsError > 30_000) {
+          conn.lastStatsError = performance.now();
+          tlog(`não consegui ler as estatísticas da conexão com ${who(id)}: ${errText(e)}`);
+        }
       }
     }
   }

@@ -7,6 +7,7 @@ import { cleanFavorites, cleanFixedRooms } from '../src/shared/rooms';
 import { formatDuration } from '../src/shared/time';
 import { buildStunRequest, classifyVpnInterfaces, isCgnatRange, isPrivateIpv4, natVerdict, parseStunMapped, parseStunResponse } from '../src/main/network';
 import { SignalingServer } from '../src/main/signaling';
+import { JoinError, redact } from '../src/renderer/signaling-client';
 
 test('invite code round-trips and is 16 chars in 4 groups', () => {
   const data = { ip: '201.17.5.250', port: 47800, token: 0xdeadbeef };
@@ -537,4 +538,34 @@ test('Discord notice: names typed by a person cannot break the message or ping a
   assert.ok(!fieldOf(e, 'Código da sala')!.value.slice(3, -3).includes('`')); // a backtick in the code cannot close the code block
   assert.equal((openedEmbed({ host: '', roomName: '', code: 'X', hasAvatar: false }, 1) as Record<string, any>).title, 'Jaca room'); // nameless room
   assert.equal((openedEmbed({ host: '', roomName: 'S', code: 'X', hasAvatar: false }, 1) as Record<string, any>).author.name, 'Alguém abriu uma sala');
+});
+
+// ---- regressions: the log must say what really came back, but never hold a way into a room
+
+test('log: a server answer keeps its content but hides the resume token, the invite code and shortens photos', () => {
+  const answer = JSON.stringify({
+    type: 'welcome',
+    payload: {
+      peerId: 'a1b2c3d4e5f6',
+      resumeToken: 'SEGREDO-DE-RETOMADA',
+      inviteCode: 'K7QM2-XRA9T@minha-conta',
+      roomName: 'Sala X',
+      peers: [{ peerId: 'z9', name: 'Ana', avatar: 'data:image/jpeg;base64,' + 'A'.repeat(5000), share: null }],
+    },
+  });
+  const line = redact(answer);
+  assert.ok(line.includes('"type":"welcome"') && line.includes('"roomName":"Sala X"') && line.includes('"peerId":"a1b2c3d4e5f6"'), 'what the server said stays readable');
+  assert.ok(!line.includes('SEGREDO-DE-RETOMADA') && !line.includes('K7QM2-XRA9T'), 'secrets are hidden');
+  assert.ok(line.includes('"resumeToken":"<oculto>"') && line.includes('"inviteCode":"<oculto>"'));
+  assert.ok(/"avatar":"<foto \d+ bytes>"/.test(line) && !line.includes('AAAA'), 'a photo is only its size');
+  assert.ok(redact('x'.repeat(5000)).length <= 700, 'cut so one answer cannot fill the file');
+  assert.ok(!redact('{"key":"owner-key-123456789012345678"}').includes('owner-key'), 'an owner key is hidden too');
+});
+
+test('join errors carry what exactly happened, for the log and not for the screen', () => {
+  const e = new JoinError('TIMEOUT');
+  assert.equal(e.code, 'TIMEOUT');
+  assert.equal(e.detail, ''); // filled by the client with the phase, the times and the close codes
+  e.detail = 'a conexão abriu em 273 ms, mas a sala não respondeu em 15 s';
+  assert.equal(e.message, 'TIMEOUT'); // the text shown to the person is chosen elsewhere; the detail never leaks into it
 });

@@ -40,9 +40,11 @@ async function createRoom(id, name = 'Ana', roomName = 'Sala X', canResume = fal
   await wait();
   return c;
 }
-async function joinGuest(id, name = 'Bia', canResume = false) {
+async function joinGuest(id, name = 'Bia', options = false) {
+  // `options` is either the old `canResume` boolean or { canResume, avatar }
+  const o = typeof options === 'object' ? options : { canResume: options };
   const g = await open(`/ws/${id}`);
-  send(g.ws, 'join', { token: 0, name, avatar: null, ...(canResume ? { canResume } : {}) });
+  send(g.ws, 'join', { token: 0, name, avatar: o.avatar ?? null, ...(o.canResume ? { canResume: true } : {}) });
   await wait();
   return g;
 }
@@ -363,6 +365,29 @@ test('what is shared (screen or camera) reaches the others, also late joiners; a
   const late = await joinGuest(id, 'Caio');
   const peers = late.msgs.find((m) => m.type === 'welcome').payload.peers;
   assert.equal(peers.find((p) => p.name === 'Ana').share.source, 'camera');
+});
+
+test('a profile photo too big for a WebSocket attachment never leaves the join without an answer: the person gets in without the photo', async () => {
+  const id = roomId();
+  const host = await createRoom(id, 'Ana', 'Sala X');
+  const photo = (n) => 'data:image/jpeg;base64,' + 'A'.repeat(n);
+
+  // a photo that fits is kept and shown to everybody
+  const small = await joinGuest(id, 'Bia', { avatar: photo(9000) });
+  assert.equal(small.msgs.find((m) => m.type === 'welcome').payload.peers.length, 1); // the welcome lists who was already there: the host
+  assert.equal(host.msgs.filter((m) => m.type === 'peer-joined').at(-1).payload.avatar.length, 9000 + 23);
+
+  // a photo of 25 KB, 60 KB or 200 KB used to be swallowed: no welcome, no error. Now the welcome comes, with no photo
+  for (const size of [25_000, 60_000, 200_000]) {
+    const big = await joinGuest(id, `Caio${size}`, { avatar: photo(size) });
+    assert.ok(big.msgs.find((m) => m.type === 'welcome'), `welcome for a ${size} byte photo`);
+    assert.equal(host.msgs.filter((m) => m.type === 'peer-joined').at(-1).payload.avatar, null);
+  }
+
+  // changing to a big photo later does not break the room either: the others are told, without the photo
+  send(small.ws, 'profile-update', { name: 'Bia', avatar: photo(50_000) });
+  await wait();
+  assert.equal(host.msgs.filter((m) => m.type === 'peer-updated').at(-1).payload.avatar, null);
 });
 
 test('the number of people watching a share travels with it, is kept for late joiners, and anything odd counts as zero', async () => {

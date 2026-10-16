@@ -778,6 +778,25 @@ video::-webkit-media-controls, video::-webkit-media-controls-enclosure, video::-
 .update-banner button.primary { background: #2a1d03; border-color: #2a1d03; color: var(--pod); padding: 5px 14px; }
 .update-banner button.primary:hover:not(:disabled) { background: #3b2a06; border-color: #3b2a06; }
 .update-banner button:disabled { opacity: 0.7; }
+.update-banner { position: relative; }
+.update-banner .update-close {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  border: 0;
+  background: transparent;
+  color: #2a1d03;
+  transition: background 0.16s;
+}
+.update-banner .update-close:hover { background: rgba(42, 29, 3, 0.18); }
+@media (prefers-reduced-motion: reduce) { .update-banner .update-close { transition: none; } }
 
 /* ---------- scrollbars */
 * { scrollbar-width: auto; }

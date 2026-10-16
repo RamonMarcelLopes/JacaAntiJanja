@@ -1,8 +1,14 @@
 import { AppConfig, Message, PeerInfo, RESOLUTIONS, ShareInfo } from '../shared/protocol';
 import { startNativeAudio, NativeAudio } from './rtc/native-audio';
-import { PeerManager, Quality } from './rtc/peer-manager';
+import { fitAvatar } from './dom';
+import { errText, PeerManager, Quality } from './rtc/peer-manager';
 import { SignalingClient } from './signaling-client';
 import { playSound, SoundName } from './sounds';
+
+/** One line in jaca.log (file only, never on screen) about what happens in the room. */
+const slog = (text: string) => void window.jaca.log('sala', text);
+const tlog = (text: string) => void window.jaca.log('transmissao', text);
+const clog = (text: string) => void window.jaca.log('captura', text);
 
 export interface PeerView extends PeerInfo {
   quality: Quality;
@@ -159,6 +165,7 @@ export class Session {
       case 'peer-joined': {
         const p = msg.payload as PeerInfo;
         this.peers.set(p.peerId, { ...p, quality: 'unknown', rtt: null });
+        slog(`${p.name} (${p.peerId.slice(0, 4)}) entrou; agora ${this.peers.size} na sala`);
         this.onNotice(`${p.name} entrou na sala.`, 'info');
         this.cue('peer-join');
         break;
@@ -168,6 +175,7 @@ export class Session {
         const name = this.peers.get(id)?.name;
         this.peers.delete(id);
         this.pm.peerLeft(id);
+        slog(`${name ?? 'alguém'} (${String(id).slice(0, 4)}) saiu; agora ${this.peers.size} na sala`);
         if (name) {
           this.onNotice(`${name} saiu da sala.`, 'info');
           this.cue('peer-leave');
@@ -188,6 +196,7 @@ export class Session {
         if (p) {
           const started = !p.share; // the same message also announces quality changes, which must stay silent
           p.share = msg.payload as ShareInfo;
+          if (started) tlog(`${p.name} começou a transmitir: ${p.share.source ?? 'screen'} ${p.share.resolution} ${p.share.fps} fps ${p.share.mode}`);
           if (started) this.cue('peer-share-start');
         }
         break;
@@ -195,13 +204,17 @@ export class Session {
       case 'share-stopped': {
         const p = msg.from ? this.peers.get(msg.from) : undefined;
         if (p) {
-          if (p.share) this.cue('peer-share-stop');
+          if (p.share) {
+            tlog(`${p.name} parou de transmitir`);
+            this.cue('peer-share-stop');
+          }
           p.share = null;
         }
         if (msg.from) this.pm.peerStoppedSharing(msg.from);
         break;
       }
       case 'room-closed':
+        slog('o host encerrou a sala (mensagem room-closed)');
         this.finish('room-closed');
         return;
       default:
@@ -215,7 +228,8 @@ export class Session {
     const me = this.me();
     me.name = name;
     me.avatar = avatar;
-    this.sig.send('profile-update', null, { name, avatar });
+    // the others get a copy that fits what the room server accepts; here the photo stays as it is
+    void fitAvatar(avatar).then((sent) => this.sig.send('profile-update', null, { name, avatar: sent }));
     this.onChange();
   }
 
@@ -241,6 +255,7 @@ export class Session {
   /** Watch one more screen or camera without leaving the ones already open. The first one watched takes the focus. */
   addView(peerId: string): void {
     if (!this.canWatch(peerId) || this.watched.has(peerId)) return;
+    tlog(`abri a tela de ${peerId === this.selfId ? 'você mesmo (prévia)' : (this.peers.get(peerId)?.name ?? peerId.slice(0, 4))}; abertas agora ${this.watched.size + 1}`);
     this.watched.add(peerId);
     if (peerId !== this.selfId) this.pm.watch(peerId);
     if (!this.viewing) this.viewing = peerId;
@@ -257,6 +272,7 @@ export class Session {
   /** Stops watching one person; when it was the focused one, another one being watched takes the focus. */
   removeView(peerId: string): void {
     if (!this.watched.delete(peerId)) return;
+    tlog(`fechei a tela de ${peerId === this.selfId ? 'você mesmo (prévia)' : (this.peers.get(peerId)?.name ?? peerId.slice(0, 4))}; restam ${this.watched.size}`);
     if (peerId === this.selfId) {
       if (this.viewing === peerId) this.viewing = this.watched.values().next().value ?? null;
     } else {
@@ -283,7 +299,14 @@ export class Session {
 
   async startSharing(sourceId: string, requested: ShareInfo): Promise<void> {
     const info: ShareInfo = { ...requested, source: sourceId.startsWith('camera:') ? 'camera' : 'screen', viewers: 0 };
-    const stream = await this.capture(sourceId, info, () => playSound('self-share-start'));
+    clog(`pedido para transmitir: ${info.source} ${info.resolution} ${info.fps} fps ${info.mode} (fonte ${sourceId.startsWith('camera:') ? 'câmera' : sourceId.split(':')[0]})`);
+    let stream: MediaStream;
+    try {
+      stream = await this.capture(sourceId, info, () => playSound('self-share-start'));
+    } catch (e) {
+      clog(`a captura FALHOU: ${errText(e)}`);
+      throw e;
+    }
     this.local = stream;
     this.sharedSourceId = sourceId;
     this.shareInfo = info;
@@ -301,13 +324,21 @@ export class Session {
     const info = this.shareInfo;
     if (!this.sharing || !info || sourceId === this.sharedSourceId) return;
     const old = this.local;
-    const stream = await this.capture(sourceId, info, async () => {
-      // the old capture is released only now that the new one was granted
-      old?.getVideoTracks().forEach((t) => (t.onended = null));
-      this.native?.stop();
-      this.native = null;
-      await window.jaca.stopAudio();
-    });
+    clog(`pedido para trocar a fonte transmitida (${this.shareInfo?.source} → ${sourceId.startsWith('camera:') ? 'camera' : 'screen'})`);
+    let stream: MediaStream;
+    try {
+      stream = await this.capture(sourceId, info, async () => {
+        // the old capture is released only now that the new one was granted
+        old?.getVideoTracks().forEach((t) => (t.onended = null));
+        this.native?.stop();
+        this.native = null;
+        await window.jaca.stopAudio();
+      });
+    } catch (e) {
+      clog(`a troca de fonte FALHOU (a transmissão atual continua): ${errText(e)}`);
+      throw e;
+    }
+    clog('troca de fonte concluída');
     this.pm.replaceStream(stream);
     old?.getTracks().forEach((t) => t.stop());
     this.local = stream;
@@ -338,6 +369,7 @@ export class Session {
     // Capture is granted. The helper that records the audio only starts after this, so the cue does not end up in the stream.
     await afterGrant();
     const audio = await window.jaca.startAudio(sourceId);
+    clog(`captura de vídeo liberada (${stream.getVideoTracks()[0]?.getSettings().width}x${stream.getVideoTracks()[0]?.getSettings().height} a ${Math.round(stream.getVideoTracks()[0]?.getSettings().frameRate ?? 0)} fps); resposta do áudio: ${JSON.stringify(audio)}`);
     // only problems are shown next to the controls; a working capture needs no announcement
     this.audioNote = audio.ok ? '' : audio.message;
     this.audioIsolated = audio.ok && audio.isolated;
@@ -350,7 +382,8 @@ export class Session {
           stream.removeTrack(t);
         }
         stream.addTrack(this.native.track);
-      } catch {
+      } catch (e) {
+        clog(`falha ao iniciar a captura de áudio sem Discord: ${errText(e)}`);
         this.audioNote = 'Falha ao iniciar a captura de áudio sem Discord.';
         this.audioIsolated = false;
         await window.jaca.stopAudio();
@@ -360,7 +393,10 @@ export class Session {
     }
     const video = stream.getVideoTracks()[0];
     video.contentHint = info.mode === 'detail' ? 'detail' : 'motion';
-    video.onended = () => this.stopSharing();
+    video.onended = () => {
+      clog('a captura de tela terminou por conta própria (a janela fechou ou o Windows parou de capturar)');
+      this.stopSharing();
+    };
     return stream;
   }
 
@@ -371,13 +407,18 @@ export class Session {
       video: { deviceId: { exact: deviceId }, width: { ideal: width }, height: { ideal: height }, frameRate: { ideal: info.fps } },
       audio: false,
     });
+    const s = stream.getVideoTracks()[0]?.getSettings();
+    clog(`câmera aberta: ${stream.getVideoTracks()[0]?.label || 'sem nome'} ${s?.width}x${s?.height} a ${Math.round(s?.frameRate ?? 0)} fps (pedido ${info.resolution}/${info.fps})`);
     await afterGrant();
     // no sound of this app can end up in a camera picture, so incoming audio does not need to be muted
     this.audioNote = '';
     this.audioIsolated = true;
     const video = stream.getVideoTracks()[0];
     video.contentHint = info.mode === 'detail' ? 'detail' : 'motion';
-    video.onended = () => this.stopSharing(); // unplugged camera
+    video.onended = () => {
+      clog('a câmera parou sozinha (desconectada ou usada por outro programa)');
+      this.stopSharing();
+    };
     return stream;
   }
 
@@ -391,6 +432,7 @@ export class Session {
 
   stopSharing(silent = false): void {
     if (!this.sharing) return;
+    clog(`transmissão encerrada${silent ? ' (ao sair da sala)' : ''}`);
     this.pm.stopShare();
     this.native?.stop();
     this.native = null;
@@ -413,6 +455,7 @@ export class Session {
   private finish(reason: EndReason): void {
     if (this.ended) return;
     this.ended = true;
+    slog(`sessão encerrada: ${reason === 'left' ? 'você saiu' : reason === 'room-closed' ? 'sala encerrada pelo host' : 'conexão perdida e não voltou'}`);
     this.stopSharing(true);
     this.pm.close();
     this.sig.close();

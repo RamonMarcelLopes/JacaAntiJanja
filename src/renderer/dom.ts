@@ -89,6 +89,46 @@ export function avatarEl(name: string, avatar: string | null, size = 64): HTMLEl
   return h('div', { class: 'avatar', style: { ...base, background: colorFromName(name) } }, initials(name));
 }
 
+/** The biggest photo (as a data URL) the room server accepts: its per-connection storage is limited to 16 KB, so the Worker drops anything above this. */
+export const MAX_SENT_AVATAR_CHARS = 12_000;
+
+/**
+ * The photo as it goes to the room: the saved one when it already fits, otherwise a smaller copy of it (the saved photo on this PC is not touched).
+ * Sizes and qualities are tried from the best to the smallest until the data URL fits. Returns null only when the image cannot be read.
+ */
+export async function fitAvatar(avatar: string | null, maxChars = MAX_SENT_AVATAR_CHARS): Promise<string | null> {
+  if (!avatar || avatar.length <= maxChars) return avatar;
+  try {
+    // loaded as an image (the window's security policy allows that for photos, but not a fetch of a data: address)
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = () => reject(new Error('a imagem da foto não pôde ser lida'));
+      i.src = avatar;
+    });
+    const side = Math.min(img.naturalWidth, img.naturalHeight);
+    let best = avatar;
+    for (const size of [200, 160, 128, 96]) {
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = size;
+      canvas.getContext('2d')!.drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, size, size);
+      for (const quality of [0.82, 0.7, 0.58, 0.45]) {
+        const candidate = canvas.toDataURL('image/jpeg', quality);
+        if (candidate.length < best.length) best = candidate;
+        if (candidate.length <= maxChars) {
+          void window.jaca.log('config', `foto de perfil reduzida para a sala: ${avatar.length} → ${candidate.length} caracteres (${size}px, qualidade ${quality})`);
+          return candidate;
+        }
+      }
+    }
+    void window.jaca.log('erro', `não consegui reduzir a foto de perfil o bastante para a sala (${avatar.length} → ${best.length} caracteres); ela vai sem foto`);
+    return null;
+  } catch (e: any) {
+    void window.jaca.log('erro', `não consegui reduzir a foto de perfil: ${e?.message ?? e}; ela vai sem foto`);
+    return null;
+  }
+}
+
 /** Reads an image file and returns a 128x128 cover-cropped JPEG data URL. */
 export async function resizeAvatar(file: File): Promise<string> {
   const bitmap = await createImageBitmap(file);

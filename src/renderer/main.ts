@@ -66,6 +66,7 @@ function showHome(): void {
   // Settings sits to the LEFT of Home: coming back from it Home slides in from the right. From a room Home slides in from the left.
   const direction: Direction = current === 'settings' ? 'forward' : 'back';
   current = 'home';
+  void window.jaca.log('app', 'tela: início');
   mount(
     renderHome({
       // getter: `update` replaces the config object, so screens must always read the current one
@@ -90,6 +91,7 @@ function showSettings(): void {
     back: showHome,
   });
   current = 'settings';
+  void window.jaca.log('app', 'tela: configurações');
   mount(view.el, view.dispose, 'back'); // Settings comes in from the left (left to right)
 }
 
@@ -112,6 +114,7 @@ function showRoom(session: Session, room: RoomInfo | null): void {
     showHome();
   };
   current = 'room';
+  void window.jaca.log('app', 'tela: sala');
   mount(view.el, view.dispose, 'forward'); // the room comes in from the right
   playSound('self-join');
 }

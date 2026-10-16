@@ -44,6 +44,16 @@ test('watching two people at once: the grid shows both live pictures, a click pu
       await expect.poll(() => videos.nth(index).evaluate((v: HTMLVideoElement) => v.videoWidth), { timeout: 30_000 }).toBeGreaterThan(0);
     }
 
+    // REGRESSION: the viewer count beside AO VIVO pushed the connection dot and the "ms" out of the card; both must stay visible (and inside it)
+    for (const name of ['Bia', 'Caio']) {
+      const card = ana.page.locator('.peer-row', { hasText: name });
+      await expect(card.locator('.dot')).toBeVisible({ timeout: 15_000 });
+      await expect(card.locator('.meta-rtt')).toBeVisible();
+      const box = (await card.boundingBox())!;
+      const rtt = (await card.locator('.meta-rtt').boundingBox())!;
+      expect(rtt.x + rtt.width).toBeLessThanOrEqual(box.x + box.width);
+    }
+
     // each sharer shows one viewer in the list (the count travels with the share)
     for (const name of ['Bia', 'Caio']) {
       await expect(ana.page.locator('.peer-row', { hasText: name }).locator('.viewers-count')).toHaveText('1', { timeout: 15_000 });

@@ -48,16 +48,18 @@ let selectedSourceId: string | null = null;
 
 const configPath = () => path.join(app.getPath('userData'), 'config.json');
 const logPath = () => path.join(app.getPath('userData'), 'jaca.log');
+/** The kinds of line the window may write to the log (what each one is about is in the text). */
+const LOG_KINDS = ['entrar', 'criar', 'rede', 'erro', 'sala', 'app', 'worker', 'transmissao', 'captura', 'atualizacao', 'config'];
 
 /**
- * Appends one line to the log file (jaca.log in the app folder; the previous one is kept as jaca.old.log once it passes 512 KB).
+ * Appends one line to the log file (jaca.log in the app folder; the previous one is kept as jaca.old.log once it passes 2 MB).
  * It never holds owner keys, room tokens or full invite codes: the person may send this file to get help.
  */
 function logEvent(kind: string, text: string): void {
   try {
     const file = logPath();
     try {
-      if (fs.statSync(file).size > 512 * 1024) fs.renameSync(file, path.join(path.dirname(file), 'jaca.old.log'));
+      if (fs.statSync(file).size > 2 * 1024 * 1024) fs.renameSync(file, path.join(path.dirname(file), 'jaca.old.log'));
     } catch {
       /* no log yet */
     }
@@ -66,6 +68,22 @@ function logEvent(kind: string, text: string): void {
   } catch {
     /* logging must never break the app */
   }
+}
+
+/** The settings that matter for a bug report, as one line. Never a key, a webhook, a photo or an address: only whether they exist. */
+function configSummary(cfg: AppConfig): string {
+  return [
+    `modo ${cfg.connectionMode}`,
+    `worker ${cfg.workerSubdomain ? 'conta ' + cfg.workerSubdomain : 'não configurado'}${cfg.workerOwnerKeyEnc ? ' (chave guardada)' : ''}`,
+    `porta ${cfg.port}`,
+    `endereço manual ${cfg.hostAddressOverride ? 'sim' : 'não'}`,
+    `codec ${cfg.codec}`,
+    `tela ${cfg.resolution}/${cfg.fps}fps/${cfg.mode}`,
+    `câmera ${cfg.cameraResolution}/${cfg.cameraFps}fps/${cfg.cameraMode}, padrão ${cfg.defaultCameraId ? 'definida' : 'nenhuma'}`,
+    `salas fixas ${cfg.fixedRooms.length}, favoritas ${cfg.favoriteRooms.length}`,
+    `áudio excluído "${cfg.excludeAudioProcess}"`,
+    `sons desligados ${cfg.disabledSounds.length}, volume ${cfg.soundVolume}`,
+  ].join('; ');
 }
 
 /** What this PC looks like to the app (no addresses of the PC itself): system, resolver settings, proxy and network adapters. */
@@ -355,14 +373,31 @@ function readOwnerKey(cfg: AppConfig): string | null {
   }
 }
 
+/** An error as it really is, for the log: name, message, system code and the cause that fetch hides inside (DNS, TLS, reset...). */
+function errDetail(e: any): string {
+  const cause = e?.cause ? ` | causa: ${e.cause.name ?? ''} ${e.cause.code ?? ''} ${e.cause.message ?? e.cause}`.trim() : '';
+  return `${e?.name ?? 'Erro'}${e?.code ? ' [' + e.code + ']' : ''}: ${e?.message ?? e}${cause}`;
+}
+
+/** What a server answered, for the log: status, how long it took, the headers that say who answered, and the start of the body. */
+async function describeResponse(res: Response, ms: number): Promise<string> {
+  const body = (await res.text().catch(() => '')).replace(/\s+/g, ' ').slice(0, 240);
+  const server = [res.headers.get('server'), res.headers.get('cf-ray') ? 'cf-ray ' + res.headers.get('cf-ray') : null].filter(Boolean).join(', ');
+  return `HTTP ${res.status} ${res.statusText} em ${ms} ms${server ? ` (${server})` : ''}; corpo: "${body}"`;
+}
+
 async function checkWorker(httpBase: string, key: string): Promise<{ ok: boolean; message: string }> {
+  const t0 = Date.now();
   await ensureNameResolution(httpBase);
+  const host = httpBase.replace(/^https?:\/\//, '');
   try {
     const res = await fetch(`${httpBase}/api/check?key=${encodeURIComponent(key)}`, { signal: AbortSignal.timeout(8000) });
+    logEvent('worker', `verificar chave em ${host}: ${await describeResponse(res.clone(), Date.now() - t0)}`); // the key is in the request address and never written
     if (res.ok) return { ok: true, message: 'Worker encontrado e chave correta.' };
     if (res.status === 401) return { ok: false, message: 'A chave do dono não confere com a do Worker.' };
     return { ok: false, message: `O endereço respondeu com erro ${res.status}. Confira o nome da conta e se o Worker foi publicado.` };
-  } catch {
+  } catch (e) {
+    logEvent('worker', `verificar chave em ${host}: sem resposta depois de ${Date.now() - t0} ms: ${errDetail(e)}`);
     return { ok: false, message: 'Não consegui alcançar o Worker. Confira o nome da conta, a internet e se o Worker foi publicado.' };
   }
 }
@@ -372,14 +407,18 @@ const WORKER_DEPLOY_URL = 'https://deploy.workers.cloudflare.com/?url=https://gi
 
 /** Registers a new random owner key on a Worker that has no owner yet (the first one to ask wins). */
 async function claimWorker(httpBase: string, key: string): Promise<{ ok: boolean; message: string }> {
+  const t0 = Date.now();
   await ensureNameResolution(httpBase);
+  const host = httpBase.replace(/^https?:\/\//, '');
   try {
     const res = await fetch(`${httpBase}/api/claim`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key }), signal: AbortSignal.timeout(8000) });
+    logEvent('worker', `registrar chave nova em ${host}: ${await describeResponse(res.clone(), Date.now() - t0)}`);
     if (res.status === 403) return { ok: false, message: 'Esse Worker já tem um dono (outra chave). Se foi você que o conectou antes e perdeu a chave, o guia "Recuperar o acesso" (docs/cloudflare-recuperar-acesso.md, no GitHub do app; in English: cloudflare-recover-access.md) explica como definir uma chave nova em poucos passos. Se não foi você, publique o seu próprio Worker.' };
     if (!res.ok) return { ok: false, message: `O endereço respondeu com erro ${res.status}. Confira se ele é mesmo o Worker jaca-sala publicado pelo botão.` };
     const check = await checkWorker(httpBase, key); // an old Worker answers 200 to anything, so confirm that the key really works
     return check.ok ? { ok: true, message: '' } : { ok: false, message: 'Esse endereço não parece ser o Worker do Jaca anti Janja (ou é uma versão antiga). Publique de novo pelo botão.' };
-  } catch {
+  } catch (e) {
+    logEvent('worker', `registrar chave nova em ${host}: sem resposta depois de ${Date.now() - t0} ms: ${errDetail(e)}`);
     return { ok: false, message: 'Não consegui alcançar o Worker. Confira o endereço, a internet e se a publicação na Cloudflare terminou.' };
   }
 }
@@ -389,10 +428,17 @@ async function fetchRoomStatus(subdomain: string, roomId: string): Promise<Omit<
   const base = workerBase(subdomain).http;
   try {
     await ensureNameResolution(base);
+    const t0 = Date.now();
     const res = await fetch(`${base}/api/room/${roomId}`, { signal: AbortSignal.timeout(6000) });
-    if (!res.ok) return { state: 'unknown' };
+    if (!res.ok) {
+      logRoomStatusProblem(roomId, `HTTP ${res.status} ${res.statusText} em ${Date.now() - t0} ms`);
+      return { state: 'unknown' };
+    }
     const body = (await res.json()) as { open?: unknown; name?: unknown; hostName?: unknown; count?: unknown };
-    if (typeof body.open !== 'boolean') return { state: 'unknown' }; // an older Worker answers its plain text page
+    if (typeof body.open !== 'boolean') {
+      logRoomStatusProblem(roomId, `resposta sem o campo "open" (Worker antigo?): ${JSON.stringify(body).slice(0, 160)}`);
+      return { state: 'unknown' }; // an older Worker answers its plain text page
+    }
     if (!body.open) return { state: 'closed' };
     return {
       state: 'open',
@@ -400,9 +446,19 @@ async function fetchRoomStatus(subdomain: string, roomId: string): Promise<Omit<
       hostName: typeof body.hostName === 'string' ? body.hostName.slice(0, 24) : undefined,
       count: typeof body.count === 'number' ? body.count : undefined,
     };
-  } catch {
+  } catch (e) {
+    logRoomStatusProblem(roomId, `sem resposta: ${errDetail(e)}`);
     return { state: 'unknown' };
   }
+}
+
+/** The list of favorites asks every 20 s: a problem is written once per room and minute, not on every poll. */
+const roomStatusLogged = new Map<string, number>();
+function logRoomStatusProblem(roomId: string, text: string): void {
+  const now = Date.now();
+  if (now - (roomStatusLogged.get(roomId) ?? 0) < 60_000) return;
+  roomStatusLogged.set(roomId, now);
+  logEvent('worker', `estado da sala ${roomId.slice(0, 3)}…: ${text}`);
 }
 
 /** The message the window recognizes: the fixed room still looks open (the app closed without ending it), so it asks what to do. */
@@ -425,9 +481,11 @@ async function createCloudRoom(cfg: AppConfig, fixedId: string | null, takeover:
     // open and the person chose to reopen it, or "closed" while a leftover of the old room is still there: the id is taken back.
     // When the Worker could not say (unknown), nothing is taken: that could end a room that really is in use somewhere else.
     takeoverNow = status.state === 'closed' || (status.state === 'open' && takeover);
+    logEvent('criar', `sala fixa "${cfg.fixedRooms.find((r) => r.id === fixedId)?.name}": estado no Worker ${status.state}${status.state === 'open' ? ` (host ${status.hostName ?? '?'}, ${status.count ?? '?'} pessoa(s))` : ''}; retomar o lugar ${takeoverNow ? 'sim' : 'não'}`);
   } else {
     roomId = roomIdFromBytes(randomBytes(7));
   }
+  logEvent('criar', `sala Cloudflare preparada (${fixedId ? 'fixa' : 'temporária'}, conta ${cfg.workerSubdomain}); o app agora conecta no Worker como dono`);
   return {
     code: encodeCloudInvite(roomId, cfg.workerSubdomain),
     ip: workerHost(cfg.workerSubdomain),
@@ -449,12 +507,16 @@ async function createRoom(requestedName: unknown, fixedId: unknown, takeover: un
   try {
     await srv.start();
   } catch (e: any) {
+    logEvent('criar', `servidor local não iniciou na porta ${cfg.port}: ${errDetail(e)}`);
     throw new Error(e?.code === 'EADDRINUSE' ? `A porta ${cfg.port} já está em uso.` : `Falha ao iniciar o servidor: ${e?.message ?? e}`);
   }
   server = srv;
+  logEvent('criar', `sala direta: servidor local escutando na porta ${cfg.port}`);
 
+  let firewall = 'não verificado (app em desenvolvimento)';
   if (app.isPackaged) {
     const fw = await ensureFirewallRule(process.execPath);
+    firewall = String(fw);
     if (fw === 'declined') {
       warnings.push('Sem a permissão no firewall do Windows, os amigos não conseguem entrar. Crie a sala de novo e aceite o aviso de administrador.');
     }
@@ -485,6 +547,7 @@ async function createRoom(requestedName: unknown, fixedId: unknown, takeover: un
     );
   }
 
+  logEvent('criar', `sala direta pronta: firewall ${firewall}; UPnP ${mapping ? 'mapeou a porta' : 'indisponível'}; endereço do convite ${cfg.hostAddressOverride.trim() ? 'manual' : 'descoberto'} (${isPrivateIpv4(ip) ? 'privado' : 'público'}); VPNs detectadas ${vpn.length}; avisos mostrados: ${warnings.length ? warnings.map((w) => `"${w.slice(0, 80)}"`).join(' / ') : 'nenhum'}`);
   const code = encodeInvite({ ip, port: cfg.port, token: srv.token });
   srv.inviteCode = code; // everyone in the room gets it in the welcome message
   return { code, ip, port: cfg.port, token: srv.token, upnp: !!mapping, warnings, mode: 'direct' };
@@ -508,6 +571,7 @@ async function testConnectivity(): Promise<ConnectivityResult> {
   const reachable = await tcpProbe(publicIp, cfg.port);
   await tempMap?.remove();
   temp?.close();
+  logEvent('rede', `teste de conectividade: porta ${cfg.port} ${reachable ? 'acessível de fora' : 'NÃO acessível de fora'}; UPnP ${tempMap ? 'mapeou' : server ? 'sala já aberta' : 'indisponível'}; endereço ${cfg.hostAddressOverride.trim() ? 'manual' : 'descoberto por STUN'}`);
 
   return reachable
     ? { ok: true, publicIp, message: `Porta ${cfg.port} acessível em ${publicIp}. Tudo certo.` }
@@ -544,7 +608,13 @@ function registerIpc(): void {
       const current = loadConfig().fixedRooms;
       allowed.fixedRooms = allowed.fixedRooms.map((r) => ({ id: r.id, name: r.name, discordWebhookEnc: current.find((c) => c.id === r.id)?.discordWebhookEnc ?? '' }));
     }
+    const before = loadConfig();
     const saved = saveConfig(allowed);
+    // what the person changed, one line: names and short values only (never photos, webhooks, keys or the list of rooms itself)
+    const changes = Object.entries(allowed)
+      .filter(([k, v]) => JSON.stringify((before as any)[k]) !== JSON.stringify(v))
+      .map(([k, v]) => (['avatar', 'fixedRooms', 'favoriteRooms', 'hostAddressOverride'].includes(k) ? `${k} alterado` : `${k}=${typeof v === 'string' ? v.slice(0, 40) : Array.isArray(v) ? `[${v.length}]` : String(v)}`));
+    if (changes.length) logEvent('config', `alterado: ${changes.join(', ')}`);
     if (allowed.connectionMode) updateWorkerBackupMode(saved.connectionMode); // the saved copy remembers which mode was in use
     return publicConfig(saved);
   });
@@ -552,13 +622,31 @@ function registerIpc(): void {
     const cfg = loadConfig();
     return { configured: !!(cfg.workerSubdomain && cfg.workerOwnerKeyEnc), subdomain: cfg.workerSubdomain };
   });
+  // every press of "Salvar e testar" is written to the log with what the person gave (only whether a key was pasted, never the key) and the result
   ipcMain.handle('worker:save', async (_e, subdomainRaw: unknown, keyRaw: unknown) => {
+    const pasted = String(keyRaw ?? '').trim();
+    logEvent('worker', `salvar e testar: endereço "${String(subdomainRaw ?? '').slice(0, 80)}", chave ${pasted ? `colada (${pasted.length} caracteres)` : 'vazia'}, chave já guardada ${readOwnerKey(loadConfig()) ? 'sim' : 'não'}, modo ${loadConfig().connectionMode}`);
+    const result = await saveWorker(subdomainRaw, keyRaw);
+    logEvent('worker', `salvar e testar: ${result.ok ? 'deu certo' : 'FALHOU'} — ${result.message}`);
+    return result;
+  });
+  async function saveWorker(subdomainRaw: unknown, keyRaw: unknown): Promise<{ ok: boolean; message: string }> {
     const subdomain = parseWorkerAddress(String(subdomainRaw ?? ''));
     let key = String(keyRaw ?? '').trim();
     if (!subdomain) return { ok: false, message: 'O nome da conta só pode ter letras minúsculas, números e hífen (como aparece em seu-nome.workers.dev).' };
     if (!safeStorage.isEncryptionAvailable()) return { ok: false, message: 'O Windows não liberou a criptografia para guardar a chave com segurança.' };
     if (!key) {
-      // no key pasted: the Worker was published with the button, so this app creates the owner key itself and registers it
+      // already connected to this very Worker: pressing the button again only tests the saved key (and renews the copy kept outside the app data);
+      // it never tries to register a second key, which the Worker would refuse
+      const current = loadConfig();
+      const saved = current.workerSubdomain === subdomain ? readOwnerKey(current) : null;
+      if (saved) {
+        const check = await checkWorker(workerBase(subdomain).http, saved);
+        if (!check.ok) return check;
+        await keepWorkerBackup(subdomain, saved);
+        return { ok: true, message: 'Worker conectado. A chave guardada neste PC está valendo.' };
+      }
+      // no key pasted and none saved: the Worker was published with the button, so this app creates the owner key itself and registers it
       key = randomBytes(24).toString('base64url');
       const claimed = await claimWorker(workerBase(subdomain).http, key);
       if (!claimed.ok) return claimed;
@@ -572,7 +660,7 @@ function registerIpc(): void {
     saveConfig({ workerSubdomain: subdomain, workerOwnerKeyEnc: safeStorage.encryptString(key).toString('base64') });
     await keepWorkerBackup(subdomain, key);
     return { ok: true, message: 'Worker conectado. A chave foi guardada criptografada neste PC (e numa cópia que sobrevive a desinstalar o app).' };
-  });
+  }
   // plain HTTPS check of a Worker address (used to explain why a room could not be reached); only valid subdomains, only the health page
   ipcMain.handle('worker:reach', async (_e, subdomain: unknown): Promise<{ ok: boolean; detail: string; nameUnknown: boolean }> => {
     if (typeof subdomain !== 'string' || !isValidSubdomain(subdomain)) return { ok: false, detail: 'endereço inválido', nameUnknown: false };
@@ -621,7 +709,7 @@ function registerIpc(): void {
   });
   // the renderer reports what went wrong (join and room creation errors); only short text, only a few kinds
   ipcMain.handle('log:write', (_e, kind: unknown, text: unknown) => {
-    if (typeof kind === 'string' && ['entrar', 'criar', 'rede', 'erro', 'sala'].includes(kind) && typeof text === 'string') logEvent(kind, text);
+    if (typeof kind === 'string' && LOG_KINDS.includes(kind) && typeof text === 'string') logEvent(kind, text);
   });
   ipcMain.handle('log:open', () => {
     if (!fs.existsSync(logPath())) logEvent('info', 'registro aberto pelo usuário');
@@ -631,10 +719,16 @@ function registerIpc(): void {
   ipcMain.handle('worker:test', async () => {
     const cfg = loadConfig();
     const key = readOwnerKey(cfg);
-    if (!cfg.workerSubdomain || !key) return { ok: false, message: 'Nenhum Worker configurado ainda.' };
-    return checkWorker(workerBase(cfg.workerSubdomain).http, key);
+    if (!cfg.workerSubdomain || !key) {
+      logEvent('worker', `testar de novo: nenhum Worker configurado (conta ${cfg.workerSubdomain || 'vazia'}, chave ${key ? 'guardada' : 'não guardada ou ilegível'})`);
+      return { ok: false, message: 'Nenhum Worker configurado ainda.' };
+    }
+    const result = await checkWorker(workerBase(cfg.workerSubdomain).http, key);
+    logEvent('worker', `testar de novo: ${result.ok ? 'deu certo' : 'FALHOU'} — ${result.message}`);
+    return result;
   });
   ipcMain.handle('worker:clear', () => {
+    logEvent('worker', 'remover: a conexão com o Worker e a cópia guardada foram apagadas a pedido da pessoa');
     saveConfig({ workerSubdomain: '', workerOwnerKeyEnc: '', connectionMode: 'direct' });
     deleteWorkerBackup(); // "Remover" means forget it for good, including the copy that survives uninstalling
   });
@@ -878,6 +972,8 @@ if (!gotLock) {
   app.on('child-process-gone', (_e, details) => logEvent('erro', `processo ${details.type} encerrado: ${details.reason} (código ${details.exitCode})`));
   app.whenReady().then(async () => {
     logEvent('info', `app aberto (${app.isPackaged ? 'instalado' : 'desenvolvimento'}) em windows ${os.release()} ${os.arch()}, idioma ${app.getLocale()}`);
+    logEvent('app', `electron ${process.versions.electron}, chromium ${process.versions.chrome}, node ${process.versions.node}; memória ${Math.round(os.totalmem() / 1048576)} MB; ${os.cpus().length} núcleos (${os.cpus()[0]?.model?.trim() ?? '?'}); telas ${screen.getAllDisplays().length}`);
+    logEvent('config', `ao abrir: ${configSummary(loadConfig())}`);
     await restoreWorkerBackup(); // before the window asks for the config
     registerIpc();
     setupSession();
