@@ -1,7 +1,6 @@
 // One small store for the whole interface. Views subscribe and redraw; the real data comes from the config, the Session and the room status polling.
 import { encodeCloudInvite } from '../shared/invite';
-import { AppConfig, RoomInfo, RoomStatus, UpdateState } from '../shared/protocol';
-import { ROOM_ICON_KEYS } from '../shared/rooms';
+import { AppConfig, cleanRoomIcon, DEFAULT_ROOM_ICON, RoomInfo, RoomStatus, UpdateState } from '../shared/protocol';
 import type { PeerView, Session } from '../renderer/session';
 
 export interface RoomEntry {
@@ -92,26 +91,27 @@ export function hueOf(text: string): number {
   return hash % 235; // 0-235: red to blue, never purple or pink
 }
 
-/** The picture of a room: the one the owner picked, otherwise one taken from the name. */
-export function iconOf(picked: string | undefined, seed: string): string {
-  if ((ROOM_ICON_KEYS as readonly string[]).includes(String(picked))) return picked as string;
-  return ROOM_ICON_KEYS[hueOf(seed) % ROOM_ICON_KEYS.length];
+/** The picture of a room: the one its owner picked when creating it, otherwise the default (the same for everybody, so nobody sees a different picture for the same room). */
+export function iconOf(picked: string | undefined): string {
+  return cleanRoomIcon(picked) ?? DEFAULT_ROOM_ICON;
 }
 
 /** The saved rooms for the rail and the home: the fixed rooms of this PC (Cloudflare mode) and the favorites, with what the server last said about each. */
 export function roomEntries(): RoomEntry[] {
   const entries: RoomEntry[] = [];
+  // in the room, the picture the room itself carries wins: it is what everybody in it sees
+  const here = (code: string) => (S.session && S.session.roomIcon && sameRoom(S.session.inviteCode, code) ? S.session.roomIcon : '');
   const sub = S.cfg.workerSubdomain;
   if (sub) {
     for (const r of S.cfg.fixedRooms) {
       const code = encodeCloudInvite(r.id, sub);
       const st = S.statuses.get(code);
-      entries.push({ key: r.id, code, name: r.name, kind: 'fixa', fixedId: r.id, state: st?.state ?? 'unknown', host: st?.hostName, count: st?.count, hue: hueOf(r.id), icon: iconOf(r.icon, r.id) });
+      entries.push({ key: r.id, code, name: r.name, kind: 'fixa', fixedId: r.id, state: st?.state ?? 'unknown', host: st?.hostName, count: st?.count, hue: hueOf(r.id), icon: iconOf(here(code) || r.icon) });
     }
   }
   for (const f of S.cfg.favoriteRooms) {
     const st = S.statuses.get(f.code);
-    entries.push({ key: f.code, code: f.code, name: st?.name || f.name, kind: 'favorita', state: st?.state ?? 'unknown', host: st?.hostName, count: st?.count, hue: hueOf(f.code), icon: iconOf(undefined, f.code) });
+    entries.push({ key: f.code, code: f.code, name: st?.name || f.name, kind: 'favorita', state: st?.state ?? 'unknown', host: st?.hostName, count: st?.count, hue: hueOf(f.code), icon: iconOf(here(f.code) || st?.icon) });
   }
   return entries;
 }

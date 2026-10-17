@@ -6,7 +6,7 @@ declare global {
       getConfig(): Promise<AppConfig>;
       setUi(ui: 'legacy' | 'next'): Promise<boolean>;
       setConfig(patch: Partial<AppConfig>): Promise<AppConfig>;
-      createRoom(roomName: string, fixedId?: string, takeover?: boolean): Promise<RoomInfo>;
+      createRoom(roomName: string, fixedId?: string, takeover?: boolean, roomIcon?: string): Promise<RoomInfo>;
       closeRoom(): Promise<void>;
       saveFixedRoom(input: FixedRoomInput): Promise<FixedRoomSaveResult>;
       discordNotify(info: { fixedId: string; code: string }): Promise<DiscordResult>;

@@ -8,7 +8,7 @@ import path from 'node:path';
 import { closedEmbed, discordText, openedEmbed, parseDiscordWebhook } from '../shared/discord';
 import { encodeCloudInvite, encodeInvite, isValidSubdomain, parseInvite, parseWorkerAddress, roomIdFromBytes, workerHost } from '../shared/invite';
 import { cleanFavorites, cleanFixedRooms } from '../shared/rooms';
-import { AppConfig, CaptureSource, ConnectivityResult, DEFAULT_PORT, DiscordResult, FavoriteRoom, FixedRoom, FixedRoomInput, FixedRoomSaveResult, MAX_FAVORITE_ROOMS, MAX_FIXED_ROOMS, MAX_ROOM_NAME, RoomInfo, RoomStatus, SOUND_NAMES } from '../shared/protocol';
+import { AppConfig, CaptureSource, cleanRoomIcon, ConnectivityResult, DEFAULT_PORT, DiscordResult, FavoriteRoom, FixedRoom, FixedRoomInput, FixedRoomSaveResult, MAX_FAVORITE_ROOMS, MAX_FIXED_ROOMS, MAX_ROOM_NAME, RoomInfo, RoomStatus, SOUND_NAMES } from '../shared/protocol';
 import { startAudio, stopAudio } from './audio';
 import { readConfig, writeConfig } from './config-store';
 import { readRoomsBackup, writeRoomsBackup } from './rooms-backup';
@@ -27,6 +27,7 @@ const DEFAULT_CONFIG: AppConfig = {
   excludeAudioProcess: 'Discord',
   roomName: '',
   soundVolume: 60,
+  noticeSoundVolume: 100,
   disabledSounds: [],
   connectionMode: 'direct',
   workerSubdomain: '',
@@ -165,6 +166,8 @@ function saveConfig(patch: Partial<AppConfig>): AppConfig {
   next.roomName = String(next.roomName ?? '').slice(0, MAX_ROOM_NAME);
   const volume = Number(next.soundVolume);
   next.soundVolume = Number.isFinite(volume) ? Math.min(100, Math.max(0, Math.round(volume))) : 60;
+  const noticeVolume = Number(next.noticeSoundVolume);
+  next.noticeSoundVolume = Number.isFinite(noticeVolume) ? Math.min(100, Math.max(0, Math.round(noticeVolume))) : 100;
   next.disabledSounds = Array.isArray(next.disabledSounds) ? [...new Set(next.disabledSounds.filter((n) => (SOUND_NAMES as readonly string[]).includes(n)))] : [];
   next.ui = next.ui === 'next' ? 'next' : 'legacy';
   next.newUiSeen = next.newUiSeen === true || next.ui === 'next'; // having opened the new interface is remembered for good
@@ -480,7 +483,7 @@ async function fetchRoomStatus(subdomain: string, roomId: string): Promise<Omit<
       logRoomStatusProblem(roomId, `HTTP ${res.status} ${res.statusText} em ${Date.now() - t0} ms`);
       return { state: 'unknown' };
     }
-    const body = (await res.json()) as { open?: unknown; name?: unknown; hostName?: unknown; count?: unknown };
+    const body = (await res.json()) as { open?: unknown; name?: unknown; icon?: unknown; hostName?: unknown; count?: unknown };
     if (typeof body.open !== 'boolean') {
       logRoomStatusProblem(roomId, `resposta sem o campo "open" (Worker antigo?): ${JSON.stringify(body).slice(0, 160)}`);
       return { state: 'unknown' }; // an older Worker answers its plain text page
@@ -489,6 +492,7 @@ async function fetchRoomStatus(subdomain: string, roomId: string): Promise<Omit<
     return {
       state: 'open',
       name: typeof body.name === 'string' ? body.name.slice(0, MAX_ROOM_NAME) : undefined,
+      icon: cleanRoomIcon(body.icon),
       hostName: typeof body.hostName === 'string' ? body.hostName.slice(0, 24) : undefined,
       count: typeof body.count === 'number' ? body.count : undefined,
     };
@@ -544,12 +548,12 @@ async function createCloudRoom(cfg: AppConfig, fixedId: string | null, takeover:
   };
 }
 
-async function createRoom(requestedName: unknown, fixedId: unknown, takeover: unknown): Promise<RoomInfo> {
+async function createRoom(requestedName: unknown, fixedId: unknown, takeover: unknown, roomIcon?: unknown): Promise<RoomInfo> {
   await closeRoom();
   const cfg = loadConfig();
   if (cfg.connectionMode === 'cloudflare') return createCloudRoom(cfg, typeof fixedId === 'string' && fixedId ? fixedId : null, takeover === true);
   const warnings: string[] = [];
-  const srv = new SignalingServer(cfg.port, cleanRoomName(requestedName, cfg.name));
+  const srv = new SignalingServer(cfg.port, cleanRoomName(requestedName, cfg.name), cleanRoomIcon(roomIcon) ?? '');
   try {
     await srv.start();
   } catch (e: any) {
@@ -804,7 +808,7 @@ function registerIpc(): void {
     return detectVpnAddresses();
   });
   ipcMain.handle('net:nat-test', () => natMappingTest());
-  ipcMain.handle('room:create', (_e, roomName: string, fixedId?: string, takeover?: boolean) => createRoom(roomName, fixedId, takeover));
+  ipcMain.handle('room:create', (_e, roomName: string, fixedId?: string, takeover?: boolean, roomIcon?: string) => createRoom(roomName, fixedId, takeover, roomIcon));
   // Creates (no id) or changes (with id) a fixed room; the id is generated here, never by the window. A new Discord webhook is checked and
   // tested (a message is sent to the channel) BEFORE anything is kept; it is stored encrypted inside that room and the window never gets it back.
   ipcMain.handle('fixed:save', async (_e, input: FixedRoomInput): Promise<FixedRoomSaveResult> => {

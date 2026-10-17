@@ -306,7 +306,7 @@ test('the room status says whether a room is open, its name, its host and how ma
   assert.deepEqual(await status(), { open: false }, 'a room nobody created is not open');
 
   const host = await createRoom(id, 'Ana', 'Sala fixa');
-  assert.deepEqual(await status(), { open: true, name: 'Sala fixa', hostName: 'Ana', count: 1 });
+  assert.deepEqual(await status(), { open: true, name: 'Sala fixa', icon: '', hostName: 'Ana', count: 1 });
   await joinGuest(id, 'Bia');
   assert.equal((await status()).count, 2);
 
@@ -411,4 +411,44 @@ test('the number of people watching a share travels with it, is kept for late jo
   await wait();
   const late = await joinGuest(id, 'Caio');
   assert.equal(late.msgs.find((m) => m.type === 'welcome').payload.peers.find((p) => p.name === 'Ana').share.viewers, 2);
+});
+
+test('room notices: the Worker checks the text, relays it to everybody else (or to one newcomer with `to`), says who sent each one and keeps nothing', async () => {
+  const id = roomId();
+  const host = await createRoom(id, 'Ana');
+  const guest = await joinGuest(id, 'Bia');
+  const bia = host.msgs.find((m) => m.type === 'peer-joined').payload.peerId;
+  const ana = guest.msgs.find((m) => m.type === 'welcome').payload.peers[0].peerId;
+
+  send(host.ws, 'notice-add', { id: 'n1', text: '  hello  ', remainingMs: 120000, totalMs: 180000, extra: 'x' });
+  send(host.ws, 'notice-add', { id: 'bad', text: '', remainingMs: 120000 }); // refused
+  await wait();
+  const got = guest.msgs.filter((m) => m.type === 'notice-add');
+  assert.equal(got.length, 1);
+  assert.deepEqual(got[0].payload, { id: 'n1', text: 'hello', remainingMs: 120000, totalMs: 180000 });
+  assert.equal(got[0].from, ana);
+  assert.equal(host.msgs.filter((m) => m.type === 'notice-add').length, 0); // not echoed to the author
+
+  send(guest.ws, 'notice-remove', { id: 'n1' });
+  await wait();
+  const removed = host.msgs.find((m) => m.type === 'notice-remove');
+  assert.equal(removed.from, bia);
+  assert.equal(removed.payload.id, 'n1');
+});
+
+test('the room picture: chosen by the owner when the room is created, sent to everybody on join and in the room status; an unknown one becomes empty', async () => {
+  const id = roomId();
+  const c = await open(`/ws/${id}?create=1&key=${KEY}`);
+  send(c.ws, 'join', { token: 0, name: 'Ana', avatar: null, roomName: 'Sala X', roomIcon: 'rocket' });
+  await wait();
+  assert.equal(c.msgs.find((m) => m.type === 'welcome').payload.roomIcon, 'rocket');
+  const guest = await joinGuest(id, 'Bia');
+  assert.equal(guest.msgs.find((m) => m.type === 'welcome').payload.roomIcon, 'rocket');
+  assert.equal((await (await fetch(`${HTTP}/api/room/${id}`)).json()).icon, 'rocket');
+
+  const other = roomId();
+  const c2 = await open(`/ws/${other}?create=1&key=${KEY}`);
+  send(c2.ws, 'join', { token: 0, name: 'Ana', avatar: null, roomName: 'Sala Y', roomIcon: '<script>' });
+  await wait();
+  assert.equal(c2.msgs.find((m) => m.type === 'welcome').payload.roomIcon, '');
 });

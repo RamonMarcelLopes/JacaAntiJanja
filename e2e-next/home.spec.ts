@@ -218,7 +218,7 @@ test('Configurações > Notificações: volume saved in the config, the mute but
   try {
     const page = a.page;
     const layer = await openSettings(page, 'Notificações');
-    const slider = layer.locator('input[type=range]');
+    const slider = layer.locator('input[type=range]').first();
     await slider.fill('30');
     await slider.dispatchEvent('change');
     await expect.poll(() => readConfig(a).soundVolume).toBe(30);
@@ -235,6 +235,17 @@ test('Configurações > Notificações: volume saved in the config, the mute but
     await expect.poll(() => sounds(page)).toContain('peer-join');
     await layer.getByRole('switch', { name: 'Alguém entra na sala' }).click();
     await expect.poll(() => readConfig(a).disabledSounds).toEqual([]);
+
+    // the notice sound: its own switch, a button to hear it and its own volume (saved apart from the general one)
+    await layer.getByRole('switch', { name: 'Um aviso é publicado na sala' }).click();
+    await expect.poll(() => readConfig(a).disabledSounds).toEqual(['notice']);
+    await layer.getByRole('button', { name: 'Ouvir: Um aviso é publicado na sala' }).click();
+    await expect.poll(() => sounds(page)).toContain('notice');
+    const noticeVolume = layer.getByLabel('Volume do som de aviso');
+    await noticeVolume.fill('40');
+    await noticeVolume.dispatchEvent('change');
+    await expect.poll(() => readConfig(a).noticeSoundVolume).toBe(40);
+    expect(readConfig(a).soundVolume).toBe(30);
   } finally {
     await a.close();
   }

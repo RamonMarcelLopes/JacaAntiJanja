@@ -11,7 +11,7 @@
 // cannot ask for one), the first key an app registers at /api/claim. Only a hash of it is stored, and once registered it can never be replaced.
 import { DurableObject } from 'cloudflare:workers';
 import { formatRoomId, isValidRoomId, WORKER_SCRIPT_NAME } from './shared/invite';
-import { CLIENT_TYPES, MAX_MESSAGE_BYTES, MAX_PEERS, MAX_ROOM_NAME, RELAY_TYPES } from './shared/protocol';
+import { CLIENT_TYPES, cleanNotice, cleanRoomIcon, MAX_MESSAGE_BYTES, MAX_PEERS, MAX_ROOM_NAME, RELAY_TYPES } from './shared/protocol';
 import type { ErrorCode, Message, PeerInfo, ShareInfo } from '../../src/shared/protocol';
 
 export interface Env {
@@ -128,6 +128,8 @@ interface Meta {
   createdAt: number;
   inviteCode: string;
   roomName: string;
+  /** The picture the owner chose when creating the room (one of ROOM_ICON_KEYS); empty for rooms made by apps that do not send one. */
+  icon?: string;
 }
 
 /** Kept on each socket (survives hibernation). `peerId` is null until the socket has joined. */
@@ -190,7 +192,7 @@ export class Room extends DurableObject<Env> {
   private async info(): Promise<Response> {
     const meta = await this.ctx.storage.get<Meta>('meta');
     const host = meta ? (await this.roster()).find((a) => a.isHost) : undefined;
-    const body = meta && host ? { open: true, name: meta.roomName, hostName: host.name ?? '', count: (await this.roster()).length } : { open: false };
+    const body = meta && host ? { open: true, name: meta.roomName, icon: meta.icon ?? '', hostName: host.name ?? '', count: (await this.roster()).length } : { open: false };
     return Response.json(body, { headers: { 'cache-control': 'no-store' } });
   }
 
@@ -288,6 +290,7 @@ export class Room extends DurableObject<Env> {
 
     if (att.create) {
       meta.roomName = cleanRoomName(p.roomName, name);
+      meta.icon = cleanRoomIcon(p.roomIcon) ?? '';
       await this.ctx.storage.put('meta', meta);
       await this.ctx.storage.deleteAlarm();
     }
@@ -306,7 +309,7 @@ export class Room extends DurableObject<Env> {
     ws.send(
       JSON.stringify({
         type: 'welcome',
-        payload: { peerId, resumeToken, peers: roster.map(toInfo), roomName: meta.roomName, roomAgeMs: Date.now() - meta.createdAt, inviteCode: meta.inviteCode },
+        payload: { peerId, resumeToken, peers: roster.map(toInfo), roomName: meta.roomName, roomIcon: meta.icon ?? '', roomAgeMs: Date.now() - meta.createdAt, inviteCode: meta.inviteCode },
       }),
     );
     this.broadcast({ type: 'peer-joined', payload: toInfo(me) }, peerId);
@@ -335,7 +338,7 @@ export class Room extends DurableObject<Env> {
     ws.send(
       JSON.stringify({
         type: 'welcome',
-        payload: { peerId, resumeToken: token, resumed: true, peers: roster.map(toInfo), roomName: meta.roomName, roomAgeMs: Date.now() - meta.createdAt, inviteCode: meta.inviteCode },
+        payload: { peerId, resumeToken: token, resumed: true, peers: roster.map(toInfo), roomName: meta.roomName, roomIcon: meta.icon ?? '', roomAgeMs: Date.now() - meta.createdAt, inviteCode: meta.inviteCode },
       }),
     );
   }
@@ -366,6 +369,22 @@ export class Room extends DurableObject<Env> {
       att.share = null;
       this.save(ws, att);
       this.broadcast({ type: 'share-stopped', from: peerId, payload: {} }, peerId);
+      return;
+    }
+    // room notices are not kept here: the author's app sends them again to whoever joins later (with `to`), so only the checked text is relayed
+    if (msg.type === 'notice-add') {
+      const n = cleanNotice(msg.payload);
+      if (!n) return;
+      const out: Message = { type: 'notice-add', from: peerId, payload: n };
+      if (typeof msg.to === 'string') {
+        const target = this.joined().find(([, a]) => a.peerId === msg.to);
+        if (target) this.send(target[0], { ...out, to: msg.to });
+      } else this.broadcast(out, peerId);
+      return;
+    }
+    if (msg.type === 'notice-remove') {
+      const id = typeof msg.payload?.id === 'string' ? msg.payload.id.replace(/[^a-zA-Z0-9-]/g, '').slice(0, 36) : '';
+      if (id) this.broadcast({ type: 'notice-remove', from: peerId, payload: { id } }, peerId);
       return;
     }
     if (RELAY_TYPES.has(msg.type) && typeof msg.to === 'string') {

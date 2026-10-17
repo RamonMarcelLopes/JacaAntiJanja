@@ -97,6 +97,14 @@ message is sent), stored encrypted with Windows (safeStorage) inside that room, 
 pinged (`allowed_mentions` is empty). The code is visible to everybody who sees the channel, which is the point of the notice: use a channel
 you trust. In the direct mode (no Worker) there are no fixed rooms, so there is no notice.
 
+**Room notices and the room picture (new interface).** Anyone in a room can pin a short notice for everybody for a while (up to 24 h).
+The Worker keeps no notices: it checks each one (`notice-add`: text up to 140 characters, time left and total time capped at 24 h) and
+relays it to the others with the real sender, or to one newcomer when the author hands the notices that are still up to somebody who just
+joined; `notice-remove` is relayed the same way and every app accepts it only from the notice's author. The picture chosen when a room is
+created (`roomIcon` in the owner's join) is kept with the room, sent to everybody in `welcome` and answered by `GET /api/room/<id>` as
+`icon`; an unknown picture is stored as empty and the apps show the default one. Older Workers drop these messages: notices then do not
+reach the others and everybody sees the default picture.
+
 **Updating a Worker you already published.** These features need the new Worker. If you published it with the button, Cloudflare copied
 `worker/` into your own GitHub repository: replace `src/index.ts`, `src/shared/` and `wrangler.toml` there with the ones from this
 repository's `worker/` folder and commit; Cloudflare deploys it again by itself. Rooms and the owner key are not lost (the owner is stored

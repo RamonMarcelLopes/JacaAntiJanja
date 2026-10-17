@@ -1,9 +1,8 @@
 // Pure helpers that keep the lists of saved rooms in the config well-formed (kept apart from main.ts so they can be unit tested).
 import { encodeCloudInvite, isValidRoomId, parseInvite } from './invite';
-import { FavoriteRoom, FixedRoom, MAX_FAVORITE_ROOMS, MAX_FIXED_ROOMS, MAX_ROOM_NAME } from './protocol';
+import { FavoriteRoom, FixedRoom, MAX_FAVORITE_ROOMS, MAX_FIXED_ROOMS, MAX_ROOM_NAME, ROOM_ICON_KEYS } from './protocol';
 
-/** The pictures a fixed room can have in the new interface. */
-export const ROOM_ICON_KEYS = ['film', 'gamepad', 'book', 'music', 'users', 'tv', 'popcorn', 'headphones', 'swords', 'dices', 'trophy', 'rocket', 'code', 'palette', 'graduation', 'coffee', 'pizza', 'heart', 'flame', 'moon'] as const;
+export { ROOM_ICON_KEYS };
 
 const cleanName = (raw: unknown): string => String(raw ?? '').replace(/\s+/g, ' ').trim().slice(0, MAX_ROOM_NAME);
 

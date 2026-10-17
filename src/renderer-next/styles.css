@@ -233,6 +233,22 @@ html.no-motion *, html.no-motion *::before, html.no-motion *::after { animation-
   @keyframes menu-in { 0% { opacity: 0; transform: translateX(-10px) scale(0.92); } 100% { opacity: 1; transform: none; } }
   .menu.closing { animation: menu-out 0.16s ease-in both; }
   @keyframes menu-out { to { opacity: 0; transform: scale(0.94); } }
+  .notice-chip.closing { animation: notice-out 0.22s ease-in both; pointer-events: none; }
+  @keyframes notice-out { to { opacity: 0; transform: translateY(-8px) scale(0.94); } }
+  /* the bar of time left of a notice: a thin track inside the bottom of the chip / row (clear of its round corners); the bar shrinks with a transform
+     (a changing width left a painted trail under the blurred chip) */
+  .notice-track { position: absolute; left: 14px; right: 14px; bottom: 4px; height: 2px; border-radius: 2px; background: color-mix(in oklab, var(--accent) 18%, transparent); overflow: hidden; pointer-events: none; }
+  .notice-bar { display: block; width: 100%; height: 100%; border-radius: inherit; background: var(--accent); transform-origin: left center; transition: transform 1s linear; will-change: transform; }
+  /* the time picker of a new notice: − value unit + in one rounded box */
+  .stepper { display: flex; align-items: center; height: 3.25rem; padding: 0 0.3rem; border-radius: 14px; background: var(--s3); border: 1px solid var(--line); transition: border-color 0.2s, box-shadow 0.2s; }
+  .stepper:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 22%, transparent); }
+  .stepper-btn { display: grid; place-items: center; width: 2.25rem; height: 2.25rem; border-radius: 10px; color: var(--muted); background: transparent; transition: background-color 0.15s, color 0.15s, transform 0.15s var(--ease-spring); }
+  .stepper-btn:hover:not(:disabled) { background: var(--s4); color: var(--fg); }
+  .stepper-btn:active:not(:disabled) { transform: scale(0.88); }
+  .stepper-btn:disabled { opacity: 0.3; cursor: default; }
+  .notice-preset { height: 2rem; padding: 0 0.8rem; border-radius: 999px; font-size: 13px; font-weight: 600; color: var(--muted); background: var(--s3); border: 1px solid var(--line); transition: border-color 0.2s, color 0.2s, background-color 0.2s, transform 0.2s var(--ease-spring); }
+  .notice-preset:hover { border-color: color-mix(in oklab, var(--accent) 55%, var(--line)); color: var(--fg); transform: translateY(-1px); }
+  .notice-preset[aria-pressed='true'] { background: color-mix(in oklab, var(--accent) 20%, var(--s3)); border-color: var(--accent); color: var(--accent); }
   .menu-item { display: flex; align-items: center; gap: 0.625rem; width: 100%; height: 2.5rem; padding: 0 0.625rem; border-radius: 8px; border: 0; background: transparent; text-align: left; font-weight: 500; transition: background-color 0.15s, transform 0.2s var(--ease-spring); }
   .menu-item:hover, .menu-item.open { background: color-mix(in oklab, var(--accent) 18%, var(--s3)); transform: translateX(2px); }
 
@@ -296,7 +312,6 @@ html.no-motion *, html.no-motion *::before, html.no-motion *::after { animation-
   /* in focus the picture is clean: name, AO VIVO, viewers and the call bar only show while the pointer is over it */
   .arena-focus .tile .tile-info { opacity: 0; transition: opacity 0.25s; }
   .arena-focus .tile:hover .tile-info { opacity: 1; }
-  .tile.big .tile-stop { display: none; } /* in focus, stopping is the red button of the call bar (like the real app); the small X belongs to the grid */
   .tile.big .badge-live { display: none; } /* the AO VIVO label is never shown on the picture in focus, not even on hover */
   .arena-focus .callbar-wrap { opacity: 0; pointer-events: none; }
   .arena-focus:hover .callbar-wrap, body.menu-open .arena-focus .callbar-wrap, .arena-focus .callbar-wrap:focus-within { opacity: 1; pointer-events: auto; }

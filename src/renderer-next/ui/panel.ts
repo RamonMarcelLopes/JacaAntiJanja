@@ -6,6 +6,7 @@ import { emit, isMe, peers, S } from '../state';
 import { chip, personAvatar } from './controls';
 
 const QUALITY_TEXT = { good: 'Boa', ok: 'Média', bad: 'Ruim', unknown: '—' } as const;
+const latencyText = (p: { name: string; rtt: number | null }) => (p.rtt !== null ? `Latência até ${p.name}: ${p.rtt} ms` : '');
 
 export function panel(): HTMLElement & { draw(): void; tick(): void; open(on: boolean): void } {
   const root = h('aside', { id: 'details-panel', class: 'flex-none bg-s1 border-l border-line overflow-hidden transition-[width] duration-500 ease-[var(--ease-out-expo)]', style: { width: '0px' } });
@@ -50,11 +51,16 @@ export function panel(): HTMLElement & { draw(): void; tick(): void; open(on: bo
   const stat = (ico: typeof Gauge, label: string, value: string) =>
     h('div', { class: 'rounded-xl bg-s2 p-2.5' }, h('div', { class: 'flex items-center gap-1 text-muted mb-0.5' }, icon(ico, 12), label), h('div', { class: 'font-semibold tabular-nums' }, value));
 
-  const draw = () => {
+  let shown = '';
+  const draw = (force = false) => {
     const session = S.session;
     if (!session) return;
     const live = peers().filter((p) => p.share);
     const worst = peers().filter((p) => !isMe(p)).reduce<'good' | 'ok' | 'bad' | 'unknown'>((w, p) => (p.quality === 'bad' || w === 'bad' ? 'bad' : p.quality === 'ok' || w === 'ok' ? 'ok' : p.quality === 'good' || w === 'good' ? 'good' : 'unknown'), 'unknown');
+    // rebuilt only when what it shows changed (the latencies are updated in place by tick): rebuilding replayed its animations and moved the buttons under the pointer
+    const sig = JSON.stringify([session.selfId, worst, live.map((p) => [p.peerId, p.name, p.avatar?.length ?? 0, p.share])]);
+    if (sig === shown && !force) return;
+    shown = sig;
     qualityChip.replaceChildren(chip([icon(Signal, 12, worst === 'bad' ? 'text-live' : worst === 'ok' ? 'text-warn' : 'text-ok'), QUALITY_TEXT[worst]]));
     inner.replaceChildren(
       h('div', { class: 'h-12 px-4 flex items-center justify-between border-b border-line flex-none' }, h('div', { class: 'font-display font-bold flex items-center gap-2' }, icon(Activity, 17, 'text-accent'), 'Detalhes'), h('button', { class: 'icon-btn', 'aria-label': 'Fechar', onclick: () => { S.panel = false; emit('panel'); } }, icon(X, 16))),
@@ -76,7 +82,7 @@ export function panel(): HTMLElement & { draw(): void; tick(): void; open(on: bo
               stat(Activity, 'Referência', `${mbps} Mbps por pessoa`),
               stat(Eye, 'Assistindo', String(viewers)),
             ),
-            isMe(p) ? h('div', { class: 'mt-3 text-[12px] text-muted' }, viewers === 0 ? 'Ninguém assistindo agora.' : `${viewers} espectador${viewers === 1 ? '' : 'es'} × ${mbps} Mbps ≈ ${(viewers * mbps).toFixed(1)} Mbps de upload`) : h('div', { class: 'mt-3 text-[12px] text-muted' }, p.rtt !== null ? `Latência até ${p.name}: ${p.rtt} ms` : ''),
+            isMe(p) ? h('div', { class: 'mt-3 text-[12px] text-muted' }, viewers === 0 ? 'Ninguém assistindo agora.' : `${viewers} espectador${viewers === 1 ? '' : 'es'} × ${mbps} Mbps ≈ ${(viewers * mbps).toFixed(1)} Mbps de upload`) : h('div', { class: 'mt-3 text-[12px] text-muted', 'data-latency': p.peerId }, latencyText(p)),
           );
         }),
         live.length === 0 ? h('div', { class: 'text-center text-muted py-8 animate-fade-in' }, 'Ninguém está transmitindo agora.') : null,
@@ -92,12 +98,16 @@ export function panel(): HTMLElement & { draw(): void; tick(): void; open(on: bo
       if (history.length > 48) history.shift();
     }
     msText.textContent = ms === null ? '—' : String(ms);
+    inner.querySelectorAll<HTMLElement>('[data-latency]').forEach((n) => {
+      const p = S.session?.peers.get(n.dataset.latency!);
+      if (p) n.textContent = latencyText(p);
+    });
     spark();
   };
   const open = (on: boolean) => {
     root.style.width = on ? '320px' : '0px';
     root.inert = !on;
-    if (on) draw();
+    if (on) draw(true);
   };
   root.inert = true;
   return Object.assign(root, { draw, tick, open });

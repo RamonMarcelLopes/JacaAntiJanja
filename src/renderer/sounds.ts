@@ -41,6 +41,13 @@ const SOUNDS: Record<SoundName, Note[]> = {
   // a friend shares: a bright repeated "ding-ding"; when they stop, a soft falling pair
   'peer-share-start': [{ f: E6, at: 0, dur: 0.12, gain: 0.8 }, { f: E6, at: 0.15, dur: 0.3, gain: 0.8 }],
   'peer-share-stop': [{ f: A5, at: 0, dur: 0.14, type: 'triangle', gain: 0.7 }, { f: E5, at: 0.13, dur: 0.3, type: 'triangle', gain: 0.7 }],
+  // a notice pinned in the room: a short "attention" call, three bell-like notes going up and settling (only the new interface has notices)
+  notice: [
+    { f: G5, at: 0, dur: 0.14, type: 'triangle', gain: 0.75 },
+    { f: C6, at: 0.1, dur: 0.14, type: 'triangle', gain: 0.75 },
+    { f: E6, at: 0.2, dur: 0.16, type: 'triangle', gain: 0.7 },
+    { f: C6, at: 0.32, dur: 0.42, type: 'sine', gain: 0.6 },
+  ],
 };
 
 let ctx: AudioContext | null = null;
@@ -64,6 +71,13 @@ export function setSoundVolume(percent: number): void {
   volume = Math.min(1, Math.max(0, percent / 100));
 }
 
+/** Own volume of single cues on top of the general one (0-1); only the room-notice sound has one. */
+const ownVolume = new Map<SoundName, number>();
+/** 0-100, as stored in the settings. */
+export function setNoticeSoundVolume(percent: number): void {
+  ownVolume.set('notice', Math.min(1, Math.max(0, percent / 100)));
+}
+
 /** `preview` is for the play buttons in Settings: it plays even when that cue is switched off. */
 export function playSound(name: SoundName, preview = false): void {
   if (!preview && disabled.has(name)) return;
@@ -71,7 +85,8 @@ export function playSound(name: SoundName, preview = false): void {
   if (now - (lastPlayed.get(name) ?? -1000) < 100) return; // a burst of identical events plays once
   lastPlayed.set(name, now);
   window.dispatchEvent(new CustomEvent('jaca-sound', { detail: name }));
-  if (volume <= 0) return;
+  const level = volume * (ownVolume.get(name) ?? 1);
+  if (level <= 0) return;
 
   try {
     // a context left over from before the output device changed (headset plugged, VPN/audio driver restart) can stay silent for good: start a new one
@@ -83,7 +98,7 @@ export function playSound(name: SoundName, preview = false): void {
     const t0 = ctx.currentTime + 0.01;
 
     const master = ctx.createGain();
-    master.gain.value = Math.pow(volume, 1.5) * 0.5; // perceptual curve; leaves headroom for the layered notes
+    master.gain.value = Math.pow(level, 1.5) * 0.5; // perceptual curve; leaves headroom for the layered notes
     const soften = ctx.createBiquadFilter();
     soften.type = 'lowpass';
     soften.frequency.value = 6000;

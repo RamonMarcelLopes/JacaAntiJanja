@@ -1,13 +1,14 @@
 // The stage of a room: tiles of the people (grid) or one big picture (focus), the top bar and the floating call bar.
-import { Camera, CameraOff, ChevronDown, Copy, Eye, Gauge, Maximize2, Monitor, MonitorOff, MonitorUp, PanelRight, PhoneOff, SlidersHorizontal, Volume2, VolumeX, X, Zap, Activity, ZoomIn } from 'lucide';
+import { Camera, CameraOff, ChevronDown, Copy, Eye, Gauge, Maximize2, Megaphone, Monitor, MonitorOff, MonitorUp, PanelRight, PhoneOff, SlidersHorizontal, Volume2, VolumeX, X, Zap, Activity, ZoomIn } from 'lucide';
 import { AppConfig, Fps, Resolution, ShareInfo, ShareMode } from '../../shared/protocol';
 import { listCameras } from '../../renderer/cameras';
 import { PeerView } from '../../renderer/session';
 import { h, icon, reducedMotion } from '../dom';
 import { burst, rollingNumber, toast } from '../fx';
 import { leaveRoom } from '../flows';
-import { emit, focusId, hueOf, isMe, peers, roomEntries, S, sameRoom, updateConfig } from '../state';
+import { emit, focusId, hueOf, iconOf, isMe, peers, roomEntries, S, sameRoom, updateConfig } from '../state';
 import { gradient, personAvatar, ROOM_ICONS } from './controls';
+import { noticeChip, openNewNotice } from './notices';
 import { confirmDialog, openShare, prefetchSources } from './dialogs';
 import { closeMenus, toggleMenu, type MenuRow } from './menus';
 
@@ -18,6 +19,7 @@ interface Tile {
   video: HTMLVideoElement | null;
   refs: { clip: HTMLElement; scene: HTMLElement; avatarWrap: HTMLElement; gate: HTMLElement; badges: HTMLElement; controls: HTMLElement; name: HTMLElement; edge: HTMLElement | null; connecting: HTMLElement; volume: HTMLInputElement; mute: HTMLButtonElement };
   sig: string;
+  infoSig: string;
 }
 
 const QUALITY_ROWS: Array<{ key: 'resolution' | 'fps' | 'mode'; label: string; icon: typeof Monitor; options: Array<[string | number, string]> }> = [
@@ -31,7 +33,7 @@ export function currentRoomLook(): { icon: string; hue: number } {
   const code = S.session?.inviteCode ?? '';
   const entry = roomEntries().find((r) => sameRoom(r.code, code));
   if (entry) return { icon: entry.icon, hue: entry.hue };
-  return { icon: S.session?.isHost ? S.tempIcon : 'users', hue: hueOf(code || S.session?.roomName || 'sala') };
+  return { icon: iconOf(S.session?.roomIcon), hue: hueOf(code || S.session?.roomName || 'sala') };
 }
 
 /**
@@ -59,13 +61,23 @@ export function stage(): HTMLElement & { draw(animate?: boolean): void; tick(): 
   const content = h('div', { class: 'absolute inset-0 z-[1]' });
   const callbar = h('div', { class: 'callbar-wrap absolute left-1/2 bottom-5 z-20 -translate-x-1/2 transition-opacity duration-300' });
   const notice = h('div', { class: 'absolute left-1/2 top-3 z-20 -translate-x-1/2 flex flex-col items-center gap-2 pointer-events-none' });
+  // the pinned notices of the room sit in the same spot, above the short messages (reconnecting, audio); the chip is clickable, the rest is not
+  const pinned = noticeChip();
+  const pills = h('div', { class: 'flex flex-col items-center gap-2' });
+  notice.append(pinned.el, pills);
   arena.append(h('div', { class: 'aurora' }, h('i'), h('i'), h('i')), content, notice, callbar);
   root.append(topbar, arena);
   let layout: 'grid' | 'focus' | '' = '';
   let gridEl: HTMLElement | null = null;
+  let focusWrap: HTMLElement | null = null;
+  let holderEl: HTMLElement | null = null;
   let clickTimer: number | undefined;
 
   // ------------------------------------------------------------------------------------------------ fullscreen
+  // Esc leaves the fullscreen picture (Electron does not do it by itself)
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && document.fullscreenElement) void document.exitFullscreen();
+  });
   const toggleFullscreen = async (t: Tile) => {
     if (document.fullscreenElement) return void document.exitFullscreen();
     const session = S.session;
@@ -104,7 +116,7 @@ export function stage(): HTMLElement & { draw(animate?: boolean): void; tick(): 
     );
     el.append(clip, badges, name, controls);
     el.addEventListener('animationend', (e) => { if (e.target === el) el.classList.remove('animate-pop'); }); // the entrance plays once, never again when the tile is moved
-    const tile: Tile = { el, id: p.peerId, viewers, video: null, refs: { clip, scene, avatarWrap, gate, badges, controls, name, edge: null, connecting, volume, mute }, sig: '' };
+    const tile: Tile = { el, id: p.peerId, viewers, video: null, refs: { clip, scene, avatarWrap, gate, badges, controls, name, edge: null, connecting, volume, mute }, sig: '', infoSig: '' };
 
     const applyVolume = () => {
       const v = Number(volume.value);
@@ -214,15 +226,20 @@ export function stage(): HTMLElement & { draw(animate?: boolean): void; tick(): 
 
     // top badges
     const viewerCount = p.share?.viewers;
-    refs.badges.replaceChildren(
-      ...[live ? h('span', { class: 'badge-live' }, 'AO VIVO') : h('span'), live && typeof viewerCount === 'number' ? h('span', { class: 'inline-flex items-center gap-1.5 px-2 h-6 rounded-lg bg-black/55 backdrop-blur text-xs font-bold', 'aria-label': `${viewerCount} assistindo` }, icon(Eye, 13), t.viewers.el) : null].filter((x): x is HTMLElement => !!x),
-    );
+    // the labels are rebuilt only when they change: this runs every second, and rebuilding restarted the blinking dot of AO VIVO
+    const infoSig = JSON.stringify([live, typeof viewerCount === 'number', p.share?.source ?? '', me, p.name]);
+    if (t.infoSig !== infoSig) {
+      t.infoSig = infoSig;
+      refs.badges.replaceChildren(
+        ...[live ? h('span', { class: 'badge-live' }, 'AO VIVO') : h('span'), live && typeof viewerCount === 'number' ? h('span', { class: 'inline-flex items-center gap-1.5 px-2 h-6 rounded-lg bg-black/55 backdrop-blur text-xs font-bold', 'data-viewers': '' }, icon(Eye, 13), t.viewers.el) : null].filter((x): x is HTMLElement => !!x),
+      );
+      // name pill
+      refs.name.replaceChildren(
+        ...[live ? icon(p.share!.source === 'camera' ? Camera : MonitorUp, 14, 'text-accent') : null, h('span', { class: 'truncate' }, me ? `${p.name} (você)` : p.name)].filter((x): x is HTMLSpanElement | SVGElement => !!x),
+      );
+    }
+    refs.badges.querySelector('[data-viewers]')?.setAttribute('aria-label', `${viewerCount ?? 0} assistindo`);
     t.viewers.set(viewerCount ?? 0);
-
-    // name pill
-    refs.name.replaceChildren(
-      ...[live ? icon(p.share!.source === 'camera' ? Camera : MonitorUp, 14, 'text-accent') : null, h('span', { class: 'truncate' }, me ? `${p.name} (você)` : p.name)].filter((x): x is HTMLSpanElement | SVGElement => !!x),
-    );
   }
 
   // ------------------------------------------------------------------------------------------------ layouts
@@ -267,9 +284,18 @@ export function stage(): HTMLElement & { draw(animate?: boolean): void; tick(): 
       // the focus shows only the picture: the people are already in the column on the left, so there is no second list here
       for (const p of list) if (p.peerId !== focus) tiles.get(p.peerId)!.el.classList.remove('big', 'fit-w');
       // the other people wait in a hidden holder, so the pictures that are open keep playing (a video that leaves the page stops being shown)
-      const holder = h('div', { class: 'absolute left-0 top-0 w-px h-px overflow-hidden opacity-0 pointer-events-none', 'aria-hidden': 'true' });
-      for (const p of list) if (p.peerId !== focus) holder.append(tiles.get(p.peerId)!.el);
-      content.replaceChildren(h('div', { class: 'absolute inset-0 grid place-items-center p-4', style: { containerType: 'size' } }, main.el), holder);
+      // the wrappers are kept while the layout stays in focus: re-inserting the picture would restart its animations (the colors of its edge jump)
+      const keep = layout === 'focus' && focusWrap && holderEl && content.children[0] === focusWrap && content.children[1] === holderEl;
+      const wrap = keep ? focusWrap! : h('div', { class: 'absolute inset-0 grid place-items-center p-4', style: { containerType: 'size' } });
+      const holder = keep ? holderEl! : h('div', { class: 'absolute left-0 top-0 w-px h-px overflow-hidden opacity-0 pointer-events-none', 'aria-hidden': 'true' });
+      if (main.el.parentElement !== wrap) wrap.replaceChildren(main.el);
+      for (const p of list) if (p.peerId !== focus) {
+        const el = tiles.get(p.peerId)!.el;
+        if (el.parentElement !== holder) holder.append(el);
+      }
+      focusWrap = wrap;
+      holderEl = holder;
+      if (!keep) content.replaceChildren(wrap, holder);
     }
     // moving a video element pauses it: every picture on screen is resumed
     for (const t of tiles.values()) if (t.video?.srcObject) void t.video.play().catch(() => undefined);
@@ -296,11 +322,16 @@ export function stage(): HTMLElement & { draw(animate?: boolean): void; tick(): 
   }
 
   // ------------------------------------------------------------------------------------------------ top bar
+  let topSig = '';
   function drawTop(): void {
     const session = S.session!;
     const look = currentRoomLook();
+    // rebuilt only when something on it changed (rebuilding under a resting pointer made its buttons jump)
+    const sig = JSON.stringify([look, session.roomName, session.isHost, session.inviteCode, S.panel]);
+    if (sig === topSig) return;
+    topSig = sig;
     const children: Array<Node | null> = [
-      h('div', { class: 'grid place-items-center w-7 h-7 rounded-lg flex-none', style: { background: gradient(look.hue) } }, icon(ROOM_ICONS[look.icon], 15, 'text-white')),
+      h('div', { class: 'grid place-items-center w-7 h-7 rounded-lg flex-none', 'data-testid': 'room-icon', 'data-icon': look.icon, style: { background: gradient(look.hue) } }, icon(ROOM_ICONS[look.icon], 15, 'text-white')),
       h('h1', { class: 'font-display font-bold text-[15px]', 'data-testid': 'room-title' }, session.roomName || (session.isHost ? 'Sua sala' : 'Sala')),
       session.inviteCode
         ? h('button', { class: 'inline-flex items-center gap-2 h-7 px-2.5 rounded-lg bg-s3 border border-line text-xs hover:border-accent transition-colors group', 'data-tip': 'Copiar código', 'aria-label': 'Copiar código da sala', 'data-code': session.inviteCode, onclick: async () => {
@@ -314,6 +345,7 @@ export function stage(): HTMLElement & { draw(animate?: boolean): void; tick(): 
           h('span', { class: 'text-muted' }, 'Código'), h('code', { class: 'font-bold text-accent tracking-wider' }, session.inviteCode.split('@')[0]), icon(Copy, 13, 'text-muted group-hover:text-fg'))
         : null,
       h('div', { class: 'flex-1' }),
+      h('button', { class: 'icon-btn', 'data-tip': 'Novo aviso', 'data-tip-side': 'bottom', 'aria-label': 'Novo aviso', onclick: () => openNewNotice() }, icon(Megaphone, 18)),
       h('button', { class: `icon-btn ${S.panel ? '!bg-accent !text-accent-fg' : ''}`, 'data-tip': 'Detalhes da transmissão', 'data-tip-side': 'bottom', 'aria-label': 'Detalhes', onclick: () => { S.panel = !S.panel; emit('panel'); } }, icon(PanelRight, 18)),
     ];
     topbar.replaceChildren(...children.filter((c): c is Node => !!c));
@@ -381,11 +413,9 @@ export function stage(): HTMLElement & { draw(animate?: boolean): void; tick(): 
     const session = S.session!;
     const camOn = session.sharing && session.shareInfo?.source === 'camera';
     const scrOn = session.sharing && session.shareInfo?.source !== 'camera';
-    const fid = focusId();
-    // Like the original: while somebody else's picture is in focus, the screen button is the red "Parar de assistir" (it stops watching, and
-    // wins over your own share); otherwise it shares, or ends your own share.
-    const watchingOther = !!fid && fid !== session.selfId;
-    const sig = [camOn, scrOn, watchingOther, session.isHost].join('|');
+    // the screen button only shares or ends your own share: watching somebody never changes it (you can start yours while watching theirs;
+    // a picture is closed by the X on it)
+    const sig = [camOn, scrOn, session.isHost].join('|');
     if (sig === callbarSig && !force) return;
     callbarSig = sig;
     closeMenus();
@@ -421,17 +451,15 @@ export function stage(): HTMLElement & { draw(animate?: boolean): void; tick(): 
       }
     };
 
-    const scr = h('button', { class: `call-btn ${scrOn || watchingOther ? 'stop' : ''}`, 'data-tip': watchingOther ? 'Parar de assistir' : scrOn ? 'Parar de compartilhar' : 'Compartilhar tela', 'aria-label': watchingOther ? 'Parar de assistir' : scrOn ? 'Parar de compartilhar' : 'Compartilhar tela', onmouseenter: prefetchSources }, icon(scrOn || watchingOther ? MonitorOff : MonitorUp, 22));
-    scr.append(chevron(() => scrOn && !watchingOther && toggleMenu(scr, () => [
+    const scr = h('button', { class: `call-btn ${scrOn ? 'stop' : ''}`, 'data-tip': scrOn ? 'Parar de compartilhar' : 'Compartilhar tela', 'aria-label': scrOn ? 'Parar de compartilhar' : 'Compartilhar tela', onmouseenter: prefetchSources }, icon(scrOn ? MonitorOff : MonitorUp, 22));
+    scr.append(chevron(() => scrOn && toggleMenu(scr, () => [
       { label: 'Trocar tela', icon: MonitorUp, onSelect: () => openShare({ switching: true }) },
       { label: 'Qualidade', icon: Gauge, sub: qualityMenu('screen') },
-    ]), !scrOn || watchingOther));
+    ]), !scrOn));
     scr.onclick = (e) => {
       if ((e.target as HTMLElement).closest('.chev')) return;
-      if (watchingOther) return void session.stopViewing();
       if (camOn) return openShare({ switching: true }); // sharing the camera: this button picks a screen instead
       if (scrOn) return void session.stopSharing();
-      if (session.viewing && !S.gridMode) return void session.stopViewing();
       openShare();
     };
     const leave = h('button', { class: 'call-btn leave', 'data-tip': session.isHost ? 'Encerrar sala' : 'Sair da sala', 'aria-label': session.isHost ? 'Encerrar sala' : 'Sair da sala', onclick: leaveRoom /* leaving with this button is direct, no question */ }, icon(PhoneOff, 22));
@@ -465,7 +493,8 @@ export function stage(): HTMLElement & { draw(animate?: boolean): void; tick(): 
     drawTop();
     drawCallbar(animate);
     relayout(peers(), animate);
-    notice.replaceChildren(
+    pinned.update();
+    pills.replaceChildren(
       ...[
         session.reconnecting ? h('div', { class: 'px-3 h-8 inline-flex items-center rounded-full bg-live/90 text-white text-[13px] font-semibold animate-fade-up' }, 'Reconectando à sala…') : null,
         session.sharing && session.audioNote ? h('div', { class: 'px-3 h-8 inline-flex items-center rounded-full bg-black/60 backdrop-blur text-[13px] animate-fade-up' }, session.audioNote) : null,
@@ -473,6 +502,7 @@ export function stage(): HTMLElement & { draw(animate?: boolean): void; tick(): 
     );
   };
   const tick = () => {
+    pinned.update();
     for (const p of peers()) {
       const t = tiles.get(p.peerId);
       if (t) updateTile(t, p);

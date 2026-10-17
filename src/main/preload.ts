@@ -4,7 +4,7 @@ contextBridge.exposeInMainWorld('jaca', {
   getConfig: () => ipcRenderer.invoke('config:get'),
   setUi: (ui: 'legacy' | 'next') => ipcRenderer.invoke('ui:set', ui),
   setConfig: (patch: unknown) => ipcRenderer.invoke('config:set', patch),
-  createRoom: (roomName: string, fixedId?: string, takeover?: boolean) => ipcRenderer.invoke('room:create', roomName, fixedId, takeover),
+  createRoom: (roomName: string, fixedId?: string, takeover?: boolean, roomIcon?: string) => ipcRenderer.invoke('room:create', roomName, fixedId, takeover, roomIcon),
   closeRoom: () => ipcRenderer.invoke('room:close'),
   saveFixedRoom: (input: unknown) => ipcRenderer.invoke('fixed:save', input),
   discordNotify: (info: { fixedId: string; code: string }) => ipcRenderer.invoke('discord:notify', info),

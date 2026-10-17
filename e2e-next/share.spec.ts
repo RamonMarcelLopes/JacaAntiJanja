@@ -70,11 +70,14 @@ test('sharing a screen: the guest sees "AO VIVO", watches the picture with audio
     await host.page.getByRole('menuitem', { name: '720p' }).click();
     await expect(live(guest.page, 'Ana')).toContainText('720p', { timeout: 15_000 });
 
-    // the stop-watching button is the red screen button of the call bar
+    // watching never changes the screen button: it stays "Compartilhar tela" (not red); the picture is closed by the X on it
     await overStage(guest.page);
-    const stop = guest.page.locator('.callbar').getByRole('button', { name: 'Parar de assistir' });
-    await expect(stop).toHaveClass(/\bstop\b/);
-    await stop.click();
+    const share = guest.page.locator('.callbar').getByRole('button', { name: 'Compartilhar tela' });
+    await expect(share).toBeEnabled();
+    await expect(share).not.toHaveClass(/\bstop\b/);
+    await expect(guest.page.locator('.callbar').getByRole('button', { name: 'Parar de assistir' })).toHaveCount(0);
+    await tile(guest.page, 'Ana').hover();
+    await tile(guest.page, 'Ana').getByRole('button', { name: 'Parar de assistir Ana' }).click();
     await expect(guest.page.locator('video')).toHaveCount(0); // the picture is gone
     await expect(host.page.getByLabel('0 assistindo')).toBeVisible({ timeout: 15_000 });
 
@@ -140,6 +143,28 @@ test('the picture of the person being watched can be put away with a click (grid
     await tile(guest.page, 'Ana').click();
     await expect(stage.locator('[data-layout]')).toHaveAttribute('data-layout', 'focus');
     await expect(guest.page.locator('.tile.big')).toHaveAttribute('data-person', 'Ana');
+  } finally {
+    await guest.close();
+    await host.close();
+  }
+});
+
+test('REGRESSION: while watching somebody you can start your own screen without closing theirs, and it does not take the focus', async () => {
+  test.slow();
+  const host = await launchNext('watch-share-host', { name: 'Ana', hostAddressOverride: '127.0.0.1', port: 47898 }, {}, ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream']);
+  const guest = await launchNext('watch-share-guest', { name: 'Bia' });
+  try {
+    const code = await createRoom(host.page);
+    await joinRoom(guest.page, code);
+    await host.page.locator('.callbar button[aria-label="Câmera"]').click();
+    await tile(guest.page, 'Ana').getByRole('button', { name: 'Assistir Ana' }).click();
+    await expect(guest.page.locator('.tile.big')).toHaveAttribute('data-person', 'Ana', { timeout: 20_000 });
+
+    // the screen button is the plain "Compartilhar tela" (not red) and opens the share dialog: Ana's picture stays open
+    await startScreenShare(guest.page);
+    await expect(live(host.page, 'Bia')).toBeVisible({ timeout: 15_000 });
+    await expect(guest.page.locator('.tile.big')).toHaveAttribute('data-person', 'Ana');
+    await expect(tile(guest.page, 'Ana').locator('video')).toBeVisible();
   } finally {
     await guest.close();
     await host.close();

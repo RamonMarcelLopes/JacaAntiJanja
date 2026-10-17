@@ -1,4 +1,4 @@
-import { AppConfig, Message, PeerInfo, RESOLUTIONS, ShareInfo } from '../shared/protocol';
+import { AppConfig, cleanNotice, MAX_NOTICE_MS, MAX_NOTICE_TEXT, MAX_NOTICES_PER_PEER, Message, PeerInfo, RESOLUTIONS, RoomNotice, ShareInfo } from '../shared/protocol';
 import { startNativeAudio, NativeAudio } from './rtc/native-audio';
 import { fitAvatar } from './dom';
 import { errText, PeerManager, Quality } from './rtc/peer-manager';
@@ -29,6 +29,8 @@ export class Session {
   shareInfo: ShareInfo | null = null;
   audioNote = '';
   roomName = '';
+  /** The picture the owner chose for the room when creating it; empty when the room server does not say (then the interface uses the default). */
+  roomIcon = '';
   inviteCode = '';
   private roomAgeMs: number | null = null;
   private joinedAt = 0;
@@ -36,6 +38,13 @@ export class Session {
   audioIsolated = false;
   /** True while the connection to the room is down and the app is trying to get back in. */
   reconnecting = false;
+  /** Notices pinned in the room by anybody (yours included); `endsAt` is on this PC's clock. */
+  notices: Array<{ id: string; ownerId: string; text: string; endsAt: number; totalMs: number }> = [];
+  /** Notices this person closed for themselves: they stay for the others. */
+  dismissedNotices = new Set<string>();
+  private noticeTimers = new Map<string, number>();
+  /** A notice was pinned just now (by you or somebody else); not called for the ones handed over when you join. */
+  onRoomNoticeAdded: () => void = () => undefined;
   onChange: () => void = () => undefined;
   onEnded: (reason: EndReason) => void = () => undefined;
   onNotice: (text: string, kind: 'info' | 'error') => void = () => undefined;
@@ -50,11 +59,12 @@ export class Session {
     readonly isHost: boolean,
   ) {}
 
-  static async join(url: string, token: number, cfg: AppConfig, isHost: boolean, joinCode = '', options: { roomName?: string } = {}): Promise<Session> {
+  static async join(url: string, token: number, cfg: AppConfig, isHost: boolean, joinCode = '', options: { roomName?: string; roomIcon?: string } = {}): Promise<Session> {
     const sig = new SignalingClient();
     const welcome = await sig.connect(url, token, cfg.name, cfg.avatar, options);
     const s = new Session(sig, welcome.peerId, isHost);
     s.roomName = welcome.roomName ?? '';
+    s.roomIcon = welcome.roomIcon ?? '';
     // older hosts do not send the code: fall back to the one this person typed to get in
     s.inviteCode = welcome.inviteCode || joinCode;
     s.roomAgeMs = typeof welcome.roomAgeMs === 'number' ? welcome.roomAgeMs : null;
@@ -112,6 +122,7 @@ export class Session {
     const ids = new Set(current.map((p) => p.peerId));
     for (const id of [...this.peers.keys()]) {
       if (id === this.selfId || ids.has(id)) continue;
+      this.dropNoticesOf(id);
       this.peers.delete(id);
       this.pm.peerLeft(id);
     }
@@ -168,11 +179,27 @@ export class Session {
         slog(`${p.name} (${p.peerId.slice(0, 4)}) entrou; agora ${this.peers.size} na sala`);
         this.onNotice(`${p.name} entrou na sala.`, 'info');
         this.cue('peer-join');
+        // the room server keeps no notices: whoever pinned one hands it to the person who just came in, with the time that is left
+        for (const n of this.notices) if (n.ownerId === this.selfId) this.sig.send('notice-add', p.peerId, { id: n.id, text: n.text, remainingMs: n.endsAt - Date.now(), totalMs: n.totalMs });
+        break;
+      }
+      case 'notice-add': {
+        const n = cleanNotice(msg.payload);
+        if (n && msg.from && this.peers.has(msg.from) && this.notices.filter((x) => x.ownerId === msg.from && x.id !== n.id).length < MAX_NOTICES_PER_PEER) {
+          this.putNotice(msg.from, n);
+          if (!msg.to) this.onRoomNoticeAdded(); // with `to` it is an older notice handed to you on joining, not a new one
+        }
+        break;
+      }
+      case 'notice-remove': {
+        const id = String(msg.payload?.id ?? '');
+        if (this.notices.some((n) => n.id === id && n.ownerId === msg.from)) this.dropNotice(id); // only the author takes it down for everybody
         break;
       }
       case 'peer-left': {
         const id = msg.payload?.peerId as string;
         const name = this.peers.get(id)?.name;
+        this.dropNoticesOf(id); // a notice lives as long as its author is in the room
         this.peers.delete(id);
         this.pm.peerLeft(id);
         slog(`${name ?? 'alguém'} (${String(id).slice(0, 4)}) saiu; agora ${this.peers.size} na sala`);
@@ -457,8 +484,62 @@ export class Session {
     this.ended = true;
     slog(`sessão encerrada: ${reason === 'left' ? 'você saiu' : reason === 'room-closed' ? 'sala encerrada pelo host' : 'conexão perdida e não voltou'}`);
     this.stopSharing(true);
+    for (const t of this.noticeTimers.values()) window.clearTimeout(t);
+    this.noticeTimers.clear();
     this.pm.close();
     this.sig.close();
     this.onEnded(reason);
+  }
+
+  // ------------------------------------------------------------------------------------------------ room notices
+
+  /** Pins a notice for everybody for `minutes`. False when it is empty or you already have the most notices one person may keep. */
+  addNotice(text: string, minutes: number): boolean {
+    const clean = text.replace(/\s+/g, ' ').trim().slice(0, MAX_NOTICE_TEXT);
+    const ms = Math.min(Math.floor(minutes) * 60_000, MAX_NOTICE_MS);
+    if (!clean || !(ms >= 60_000) || this.notices.filter((n) => n.ownerId === this.selfId).length >= MAX_NOTICES_PER_PEER) return false;
+    const n: RoomNotice = { id: crypto.randomUUID(), text: clean, remainingMs: ms, totalMs: ms };
+    this.putNotice(this.selfId, n);
+    this.sig.send('notice-add', null, n);
+    this.onRoomNoticeAdded();
+    this.onChange();
+    return true;
+  }
+
+  /** The author takes the notice down for everybody before its time is over. */
+  removeNotice(id: string): void {
+    if (!this.notices.some((n) => n.id === id && n.ownerId === this.selfId)) return;
+    this.dropNotice(id);
+    this.sig.send('notice-remove', null, { id });
+    this.onChange();
+  }
+
+  /** Hides a notice for this person only; it stays for the others and comes back with no one's help only if it is added again. */
+  dismissNotice(id: string): void {
+    this.dismissedNotices.add(id);
+    this.onChange();
+  }
+
+  /** The notices this person can see (the ones they did not close). */
+  get visibleNotices(): Session['notices'] {
+    return this.notices.filter((n) => !this.dismissedNotices.has(n.id));
+  }
+
+  private putNotice(ownerId: string, n: RoomNotice): void {
+    this.dropNotice(n.id);
+    this.notices.push({ id: n.id, ownerId, text: n.text, endsAt: Date.now() + n.remainingMs, totalMs: n.totalMs });
+    // when the time is over the notice goes away for everybody by itself: every app counts it down on its own
+    this.noticeTimers.set(n.id, window.setTimeout(() => { this.dropNotice(n.id); this.onChange(); }, n.remainingMs));
+  }
+
+  private dropNotice(id: string): void {
+    window.clearTimeout(this.noticeTimers.get(id));
+    this.noticeTimers.delete(id);
+    this.dismissedNotices.delete(id);
+    this.notices = this.notices.filter((n) => n.id !== id);
+  }
+
+  private dropNoticesOf(ownerId: string): void {
+    for (const n of this.notices.filter((x) => x.ownerId === ownerId)) this.dropNotice(n.id);
   }
 }

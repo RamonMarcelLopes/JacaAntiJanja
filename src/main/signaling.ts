@@ -2,6 +2,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { randomBytes } from 'node:crypto';
 import {
   CLIENT_TYPES,
+  cleanNotice,
   ErrorCode,
   HEARTBEAT_MS,
   JOIN_TIMEOUT_MS,
@@ -34,6 +35,8 @@ export class SignalingServer {
   constructor(
     private port: number,
     readonly roomName: string,
+    /** The picture the owner chose for the room; sent to everybody who joins. */
+    readonly roomIcon: string = '',
   ) {
     this.token = randomBytes(4).readUInt32BE(0);
   }
@@ -168,7 +171,7 @@ export class SignalingServer {
     const peer: Peer = { peerId: randomBytes(6).toString('hex'), name, avatar, share: null, ws, alive: true };
     const others = [...this.peers.values()].map(toInfo);
     this.peers.set(peer.peerId, peer);
-    this.send(ws, { type: 'welcome', payload: { peerId: peer.peerId, peers: others, roomName: this.roomName, roomAgeMs: Date.now() - this.startedAt, inviteCode: this.inviteCode } });
+    this.send(ws, { type: 'welcome', payload: { peerId: peer.peerId, peers: others, roomName: this.roomName, roomIcon: this.roomIcon, roomAgeMs: Date.now() - this.startedAt, inviteCode: this.inviteCode } });
     this.broadcast({ type: 'peer-joined', payload: toInfo(peer) }, peer.peerId);
     return peer;
   }
@@ -194,6 +197,22 @@ export class SignalingServer {
     if (msg.type === 'share-stopped') {
       peer.share = null;
       this.broadcast({ type: 'share-stopped', from: peer.peerId, payload: {} }, peer.peerId);
+      return;
+    }
+    // room notices are not kept here: the author's app sends them again to whoever joins later (with `to`), so only the checked text is relayed
+    if (msg.type === 'notice-add') {
+      const n = cleanNotice(msg.payload);
+      if (!n) return;
+      const out: Message = { type: 'notice-add', from: peer.peerId, payload: n };
+      if (typeof msg.to === 'string') {
+        const target = this.peers.get(msg.to);
+        if (target) this.send(target.ws, { ...out, to: msg.to });
+      } else this.broadcast(out, peer.peerId);
+      return;
+    }
+    if (msg.type === 'notice-remove') {
+      const id = typeof msg.payload?.id === 'string' ? msg.payload.id.replace(/[^a-zA-Z0-9-]/g, '').slice(0, 36) : '';
+      if (id) this.broadcast({ type: 'notice-remove', from: peer.peerId, payload: { id } }, peer.peerId);
       return;
     }
     if (RELAY_TYPES.has(msg.type) && typeof msg.to === 'string') {

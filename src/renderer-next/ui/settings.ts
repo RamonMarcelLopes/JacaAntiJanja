@@ -1,9 +1,9 @@
 // The settings, as a full-screen layer. Every control animates; the theme grid changes the accent of the whole app.
-import { ArrowLeft, Bell, Cast, Check, CircleAlert, CircleCheck, Cloud, Copy, Download, FileText, FolderOpen, Info, LayoutTemplate, LoaderCircle, MapPin, Palette, Pencil, Play, Plus, RefreshCw, Trash2, Video, Volume2, VolumeX, Wifi, type IconNode } from 'lucide';
+import { ArrowLeft, Bell, Cast, Check, CircleAlert, CircleCheck, Cloud, Copy, Download, FileText, FolderOpen, Info, LayoutTemplate, LoaderCircle, MapPin, Megaphone, Palette, Pencil, Play, Plus, RefreshCw, Trash2, Video, Volume2, VolumeX, Wifi, type IconNode } from 'lucide';
 import { encodeCloudInvite } from '../../shared/invite';
 import { AppConfig, CaptureSource, DEFAULT_PORT, Fps, Resolution, RoomStatus, ShareMode, SOUND_NAMES, SoundName } from '../../shared/protocol';
 import { listCameras } from '../../renderer/cameras';
-import { playSound, setDisabledSounds, setSoundVolume } from '../../renderer/sounds';
+import { playSound, setDisabledSounds, setNoticeSoundVolume, setSoundVolume } from '../../renderer/sounds';
 import { h, icon } from '../dom';
 import { toast } from '../fx';
 import { currentTheme, setTheme, THEMES } from '../themes';
@@ -296,10 +296,15 @@ const PANELS: Record<Cat, () => HTMLElement> = {
     const list = h('div', { class: 'space-y-2 mt-4', 'data-testid': 'fixed-rooms' });
     const plain = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
     const statusText = (st: RoomStatus | undefined) => (!st || st.state === 'unknown' ? '' : st.state === 'closed' ? 'Fechada' : `Aberta · ${st.count === 1 ? '1 pessoa' : `${st.count ?? '?'} pessoas`}`);
+    let listSig = '';
     const drawList = () => {
       const rooms = S.cfg.fixedRooms;
       const code = (id: string) => (S.cfg.workerSubdomain ? encodeCloudInvite(id, S.cfg.workerSubdomain) : '');
       const shown = rooms.filter((r) => (!q || plain(r.name).includes(plain(q))) && (filter === 'all' || statuses.get(r.id)?.state === filter));
+      // the status check every 20 s mostly finds the same answers: then the rows stay (rebuilding them under the pointer made them jump)
+      const sig = JSON.stringify([q, filter, S.cfg.workerSubdomain, rooms.map((r) => [r.id, r.name, r.icon, !!r.discordWebhookEnc, statusText(statuses.get(r.id))])]);
+      if (sig === listSig) return;
+      listSig = sig;
       if (!rooms.length) return void list.replaceChildren(h('div', { class: 'text-muted py-6' }, 'Nenhuma ainda. Use "Nova sala fixa" para criar a primeira.'));
       if (!shown.length) return void list.replaceChildren(h('div', { class: 'text-muted py-6' }, 'Nenhuma sala encontrada com esse filtro.'));
       list.replaceChildren(
@@ -307,7 +312,7 @@ const PANELS: Record<Cat, () => HTMLElement> = {
           const st = statuses.get(r.id);
           return h('div', { class: 'rounded-2xl bg-s3 border border-line hover:border-accent transition-colors animate-row-in', 'data-fixed': r.name, style: { animationDelay: `${i * 60}ms` } },
             h('div', { class: 'spot flex items-center gap-3 p-3' },
-              h('div', { class: 'grid place-items-center w-10 h-10 rounded-xl flex-none', style: { background: gradient(hueOf(r.id)) } }, icon(ROOM_ICONS[iconOf(r.icon, r.id)], 20, 'text-white')),
+              h('div', { class: 'grid place-items-center w-10 h-10 rounded-xl flex-none', style: { background: gradient(hueOf(r.id)) } }, icon(ROOM_ICONS[iconOf(r.icon)], 20, 'text-white')),
               h('div', { class: 'flex-1 min-w-0' }, h('div', { class: 'font-semibold truncate' }, r.name), h('div', { class: 'text-[12px] text-muted font-mono truncate' }, code(r.id) || '—'), statusText(st) ? h('div', { class: 'text-[12px] text-muted' }, statusText(st)) : null),
               r.discordWebhookEnc ? h('span', { class: 'text-[12px] text-muted' }, 'Discord ligado') : null,
               h('button', { class: 'icon-btn', 'aria-label': `Editar ${r.name}`, 'data-tip': 'Editar sala', onclick: async () => { if (await editFixedRoom(r)) drawList(); } }, icon(Pencil, 16)),
@@ -389,11 +394,24 @@ const PANELS: Record<Cat, () => HTMLElement> = {
       if (Number(sl.value) > 0) playSound('peer-join', true);
     };
     const disabled = new Set<string>(S.cfg.disabledSounds);
-    const SOUND_TEXT: Record<SoundName, [string, 'Você' | 'Outras pessoas']> = {
+    type Group = 'Você' | 'Outras pessoas' | 'Avisos';
+    const SOUND_TEXT: Record<SoundName, [string, Group]> = {
       'self-join': ['Você entra na sala', 'Você'], 'self-leave': ['Você sai da sala', 'Você'], 'self-share-start': ['Você começa a compartilhar', 'Você'], 'self-share-stop': ['Você para de compartilhar', 'Você'],
       'peer-join': ['Alguém entra na sala', 'Outras pessoas'], 'peer-leave': ['Alguém sai da sala', 'Outras pessoas'], 'peer-share-start': ['Alguém começa a compartilhar', 'Outras pessoas'], 'peer-share-stop': ['Alguém para de compartilhar', 'Outras pessoas'],
+      notice: ['Um aviso é publicado na sala', 'Avisos'],
     };
-    const group = (g: 'Você' | 'Outras pessoas') =>
+    // the notice sound has its own volume, on top of the general one (it is the only cue that can be made quieter or louder than the others)
+    const nPct = h('span', { class: 'tabular-nums text-muted w-10 text-right' }, `${S.cfg.noticeSoundVolume ?? 100}%`);
+    const nSlider = slider(S.cfg.noticeSoundVolume ?? 100, (v) => {
+      setNoticeSoundVolume(v);
+      nPct.textContent = `${v}%`;
+    }, 0, 100, (v) => {
+      void updateConfig({ noticeSoundVolume: v });
+      playSound('notice', true); // hear the new level
+    });
+    nSlider.setAttribute('aria-label', 'Volume do som de aviso');
+    const noticeVolume = row('Volume do som de aviso', 'Em relação ao volume dos sons acima.', h('div', { class: 'flex items-center gap-3 w-[260px]' }, icon(Megaphone, 18, 'text-muted flex-none'), nSlider, nPct), 0);
+    const group = (g: Group) =>
       h('div', { class: 'mt-6' }, h('div', { class: 'text-[11px] font-extrabold tracking-[0.1em] text-muted uppercase mb-1' }, g),
         ...SOUND_NAMES.filter((n) => SOUND_TEXT[n][1] === g).map((n, i) =>
           row(SOUND_TEXT[n][0], null, h('div', { class: 'flex items-center gap-3' },
@@ -403,9 +421,10 @@ const PANELS: Record<Cat, () => HTMLElement> = {
               else disabled.add(n);
               setDisabledSounds([...disabled]);
               void updateConfig({ disabledSounds: [...disabled] as SoundName[] }); // the switch is silent: only the play button plays
-            }, SOUND_TEXT[n][0])), i * 40)));
-    return h('div', {}, sectionTitle('Notificações', 'Sons de entrada, saída e compartilhamento.'),
-      row('Volume dos sons', null, h('div', { class: 'flex items-center gap-3 w-[260px]' }, btn, sl, pct), 0), group('Você'), group('Outras pessoas'),
+            }, SOUND_TEXT[n][0])), i * 40)),
+        g === 'Avisos' ? noticeVolume : null);
+    return h('div', {}, sectionTitle('Notificações', 'Sons de entrada, saída, compartilhamento e avisos.'),
+      row('Volume dos sons', null, h('div', { class: 'flex items-center gap-3 w-[260px]' }, btn, sl, pct), 0), group('Você'), group('Outras pessoas'), group('Avisos'),
       h('div', { class: 'mt-6' }, note('Enquanto você compartilha a tela inteira, as notificações de outras pessoas ficam mudas para não irem para a transmissão. Compartilhando uma janela, elas tocam normalmente.')));
   },
 
@@ -509,16 +528,26 @@ const PANELS: Record<Cat, () => HTMLElement> = {
   Sobre() {
     const status = h('div', {});
     const version = h('span', { class: 'text-muted' }, `Versão ${S.version}`);
+    let statusSig = '';
     const drawStatus = () => {
       const st = S.update;
       const inRoom = S.view === 'room';
+      // rebuilt only when it says something else (the download percentage alone used to replay its entrance)
+      const sig = JSON.stringify([st, inRoom]);
+      if (sig === statusSig) return;
+      const sameKind = statusSig !== '' && JSON.parse(statusSig)[0].status === st.status;
+      statusSig = sig;
+      if (sameKind && st.status === 'downloading') {
+        const line = status.querySelector('[data-progress]');
+        if (line) return void (line.textContent = `Baixando a versão ${st.version}... ${st.percent ?? 0}%`);
+      }
       status.replaceChildren(
         st.status === 'available'
           ? h('div', { class: 'p-4 rounded-2xl border border-accent/50 bg-accent/10 animate-row-in' },
               h('div', { class: 'flex items-center gap-3' }, icon(Download, 20, 'text-accent'), h('div', { class: 'flex-1' }, h('div', { class: 'font-semibold' }, `Há uma atualização: a versão ${st.version} está disponível.`), h('div', { class: 'text-[13px] text-muted' }, 'Ela só é instalada quando você apertar o botão.')),
                 h('button', { class: 'btn btn-primary ripple', disabled: inRoom, title: inRoom ? 'Atualizar reinicia o app: saia da sala primeiro.' : '', onclick: () => void window.jaca.installUpdate() }, inRoom ? 'Saia da sala para instalar' : `Instalar a versão ${st.version}`)))
           : h('div', { class: 'p-4 rounded-2xl border border-line bg-s3 flex items-center gap-3 animate-row-in' }, icon(CircleCheck, 20, st.status === 'error' ? 'text-live' : 'text-ok'),
-              st.status === 'checking' ? 'Verificando...' : st.status === 'downloading' ? `Baixando a versão ${st.version}... ${st.percent ?? 0}%` : st.status === 'ready' ? 'Instalando a atualização...' : st.status === 'error' ? `Não foi possível verificar: ${st.message ?? 'erro desconhecido'}` : st.status === 'disabled' ? (st.message ?? '') : 'Você está na versão mais recente.'),
+              h('span', { 'data-progress': '' }, st.status === 'checking' ? 'Verificando...' : st.status === 'downloading' ? `Baixando a versão ${st.version}... ${st.percent ?? 0}%` : st.status === 'ready' ? 'Instalando a atualização...' : st.status === 'error' ? `Não foi possível verificar: ${st.message ?? 'erro desconhecido'}` : st.status === 'disabled' ? (st.message ?? '') : 'Você está na versão mais recente.')),
       );
     };
     drawStatus();

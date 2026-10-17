@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { WebSocket } from 'ws';
 import { decodeInvite, encodeCloudInvite, encodeInvite, isValidRoomId, parseInvite, roomIdFromBytes, workerHost, parseWorkerAddress } from '../src/shared/invite';
 import { APP_DOWNLOAD_URL, closedEmbed, discordText, humanDuration, openedEmbed, parseDiscordWebhook } from '../src/shared/discord';
+import { cleanNotice, MAX_NOTICE_MS, MAX_NOTICE_TEXT } from '../src/shared/protocol';
 import { cleanFavorites, cleanFixedRooms } from '../src/shared/rooms';
 import { formatDuration } from '../src/shared/time';
 import { buildStunRequest, classifyVpnInterfaces, isCgnatRange, isPrivateIpv4, natVerdict, parseStunMapped, parseStunResponse } from '../src/main/network';
@@ -645,4 +646,85 @@ test('rooms copy outside the app data: it also remembers which interface was cho
   assert.equal(readRoomsBackup(dir)?.ui, 'next');
   writeRoomsBackup(dir, [], []);
   assert.equal(readRoomsBackup(dir)?.newUiSeen, false);
+});
+
+test('room notice: text is trimmed and limited, the id is cleaned, the time is capped at 24 h and a notice with no text or under a second is refused', () => {
+  assert.deepEqual(cleanNotice({ id: 'a-1', text: '  hello   world ', remainingMs: 60_000 }), { id: 'a-1', text: 'hello world', remainingMs: 60_000, totalMs: 60_000 });
+  // the total (for the bar of time left) is kept, never below the time left and never above 24 h
+  assert.equal(cleanNotice({ id: 'a', text: 't', remainingMs: 60_000, totalMs: 120_000 })?.totalMs, 120_000);
+  assert.equal(cleanNotice({ id: 'a', text: 't', remainingMs: 60_000, totalMs: 1_000 })?.totalMs, 60_000);
+  assert.equal(cleanNotice({ id: 'a', text: 't', remainingMs: 60_000, totalMs: 99 * 3_600_000 })?.totalMs, MAX_NOTICE_MS);
+  assert.equal(cleanNotice({ id: 'a', text: 'x'.repeat(500), remainingMs: 60_000 })?.text.length, MAX_NOTICE_TEXT);
+  assert.equal(cleanNotice({ id: 'a<b>', text: 't', remainingMs: 60_000 })?.id, 'ab');
+  assert.equal(cleanNotice({ id: 'a', text: 't', remainingMs: 99 * 3_600_000 })?.remainingMs, MAX_NOTICE_MS);
+  assert.equal(cleanNotice({ id: 'a', text: '   ', remainingMs: 60_000 }), null);
+  assert.equal(cleanNotice({ id: 'a', text: 't', remainingMs: 500 }), null);
+  assert.equal(cleanNotice({ id: 'a', text: 't', remainingMs: Number.NaN }), null);
+  assert.equal(cleanNotice({ id: '', text: 't', remainingMs: 60_000 }), null);
+  assert.equal(cleanNotice(null), null);
+});
+
+test('room notices are relayed by the room server: to everybody else when added, to one person when handed to a newcomer, and only the author name is trusted', async () => {
+  const server = new SignalingServer(47895, 'Sala');
+  await server.start();
+  const open = (name: string) =>
+    new Promise<{ ws: WebSocket; inbox: any[]; id: string }>((resolve) => {
+      const ws = new WebSocket('ws://127.0.0.1:47895');
+      const inbox: any[] = [];
+      ws.on('open', () => ws.send(JSON.stringify({ type: 'join', payload: { token: server.token, name } })));
+      ws.on('message', (raw) => {
+        const m = JSON.parse(raw.toString());
+        inbox.push(m);
+        if (m.type === 'welcome') resolve({ ws, inbox, id: m.payload.peerId });
+      });
+    });
+  const wait = () => new Promise((r) => setTimeout(r, 150));
+  try {
+    const a = await open('Ana');
+    const b = await open('Bia');
+    a.ws.send(JSON.stringify({ type: 'notice-add', payload: { id: 'n1', text: ' hi ', remainingMs: 120_000, extra: 'x' } }));
+    a.ws.send(JSON.stringify({ type: 'notice-add', payload: { id: 'bad', text: '', remainingMs: 120_000 } }));
+    await wait();
+    const got = b.inbox.filter((m) => m.type === 'notice-add');
+    assert.equal(got.length, 1);
+    assert.deepEqual(got[0].payload, { id: 'n1', text: 'hi', remainingMs: 120_000, totalMs: 120_000 });
+    assert.equal(got[0].from, a.id);
+    assert.equal(a.inbox.filter((m) => m.type === 'notice-add').length, 0); // not echoed to the author
+
+    const c = await open('Caio');
+    a.ws.send(JSON.stringify({ type: 'notice-add', to: c.id, payload: { id: 'n1', text: 'hi', remainingMs: 100_000 } }));
+    await wait();
+    assert.equal(c.inbox.filter((m) => m.type === 'notice-add').length, 1);
+    assert.equal(b.inbox.filter((m) => m.type === 'notice-add').length, 1); // the hand-over reached only the newcomer
+
+    b.ws.send(JSON.stringify({ type: 'notice-remove', payload: { id: 'n1' } }));
+    await wait();
+    const removed = a.inbox.find((m) => m.type === 'notice-remove');
+    assert.equal(removed.from, b.id); // the server says who asked: the app ignores it unless that is the author
+    assert.equal(removed.payload.id, 'n1');
+    for (const p of [a, b, c]) p.ws.close();
+  } finally {
+    server.stop();
+  }
+});
+
+test('the local room server sends the picture of the room to everybody who joins', async () => {
+  const server = new SignalingServer(47897, 'Sala', 'rocket');
+  await server.start();
+  try {
+    const welcome: any = await new Promise((resolve) => {
+      const ws = new WebSocket('ws://127.0.0.1:47897');
+      ws.on('open', () => ws.send(JSON.stringify({ type: 'join', payload: { token: server.token, name: 'Ana' } })));
+      ws.on('message', (raw) => {
+        const m = JSON.parse(raw.toString());
+        if (m.type === 'welcome') {
+          ws.close();
+          resolve(m.payload);
+        }
+      });
+    });
+    assert.equal(welcome.roomIcon, 'rocket');
+  } finally {
+    server.stop();
+  }
 });

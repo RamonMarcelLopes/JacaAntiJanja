@@ -72,9 +72,9 @@ test('watching two people at once: the grid shows both live pictures, a click pu
     await tile(ana.page, 'Bia').click();
     await expect(layout(ana.page)).toHaveAttribute('data-layout', 'focus');
 
-    // the stop button of the call bar stops everything: the grid is back with nobody watched
-    await ana.page.getByTestId('stage').hover();
-    await ana.page.locator('.callbar').getByRole('button', { name: 'Parar de assistir' }).click();
+    // in focus the picture has its own X too: closing the last one brings the grid back with nobody watched
+    await tile(ana.page, 'Bia').hover();
+    await tile(ana.page, 'Bia').getByRole('button', { name: /Parar de assistir Bia/ }).click();
     await expect(videos).toHaveCount(0);
     await expect(layout(ana.page)).toHaveAttribute('data-layout', 'grid');
   } finally {

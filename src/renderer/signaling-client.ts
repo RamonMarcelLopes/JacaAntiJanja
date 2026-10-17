@@ -5,6 +5,8 @@ export interface WelcomePayload {
   peerId: string;
   peers: PeerInfo[];
   roomName: string;
+  /** The picture the owner chose for the room (absent on hosts and Workers that do not know pictures yet). */
+  roomIcon?: string;
   /** How long the room had been open when this client joined (absent on hosts older than this feature). */
   roomAgeMs?: number;
   /** The room's invite code, so every participant can copy it (absent on older hosts). */
@@ -95,12 +97,12 @@ export class SignalingClient {
     return this.url.includes('/ws/');
   }
 
-  async connect(url: string, token: number, name: string, avatar: string | null, extra: { roomName?: string } = {}): Promise<WelcomePayload> {
+  async connect(url: string, token: number, name: string, avatar: string | null, extra: { roomName?: string; roomIcon?: string } = {}): Promise<WelcomePayload> {
     this.url = url;
     // a photo bigger than the room server accepts would make it stay silent, so a smaller copy goes (see fitAvatar); the same copy is used to get back in
     const sentAvatar = await fitAvatar(avatar);
     this.identity = { name, avatar: sentAvatar };
-    const payload = { token, name, avatar: sentAvatar, canResume: true, ...(extra.roomName !== undefined ? { roomName: extra.roomName } : {}) };
+    const payload = { token, name, avatar: sentAvatar, canResume: true, ...(extra.roomName !== undefined ? { roomName: extra.roomName } : {}), ...(extra.roomIcon ? { roomIcon: extra.roomIcon } : {}) };
     // Cloudflare: when the room does not answer (nothing, not even "closed"), one more attempt before giving up; a clear answer (closed, full...) is final
     // (not for the host creating a room: if the first attempt did reach the Worker, a second "create" would be refused because the host is already there)
     const attempts = this.isCloud && !url.includes('create=1') ? CLOUD_JOIN_ATTEMPTS : 1;

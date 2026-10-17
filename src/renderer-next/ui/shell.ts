@@ -1,5 +1,5 @@
 // The frame of the app: title bar, the rail of rooms on the left and the column with the room's streams and people.
-import { ArrowLeftRight, Camera, Compass, Copy, Download, EllipsisVertical, House, LogOut, Lock, Minus, MonitorUp, PanelLeftClose, PanelLeftOpen, Plus, Settings, Square, Star, Tv, Users, Video, X } from 'lucide';
+import { ArrowLeftRight, Camera, Compass, Copy, Download, EllipsisVertical, House, LogOut, Lock, Minus, Monitor, MonitorUp, PanelLeftClose, PanelLeftOpen, Plus, Settings, Square, Star, Tv, Users, Video, X } from 'lucide';
 import { formatDuration } from '../../shared/time';
 import { enterRoom as _unused, createRoom, joinRoom, leaveRoom, NEW_FIXED, TEMPORARY } from '../flows';
 import { h, icon, reducedMotion } from '../dom';
@@ -41,9 +41,18 @@ export function titlebar(): HTMLElement {
 // ---------------------------------------------------------------------------------------------------------------- the update notice (top of the window)
 export function updateBanner(): HTMLElement & { draw(): void } {
   const wrap = h('div', { class: 'relative z-20', 'data-testid': 'update-banner' });
+  let shown = '';
   const draw = () => {
-    wrap.replaceChildren();
     const { status, version, percent } = S.update;
+    // the same notice stays (it slid down again on every change of screen); only the percentage of the download changes in place
+    const sig = JSON.stringify([status, version, S.updateDismissed, S.view === 'room']);
+    const progress = wrap.querySelector<HTMLElement>('[data-progress]');
+    if (sig === shown) {
+      if (progress) progress.textContent = `Baixando a versão ${version}... ${percent ?? 0}%`;
+      return;
+    }
+    shown = sig;
+    wrap.replaceChildren();
     const bar = (...children: Array<Node | null>) =>
       h('div', { class: 'relative flex items-center justify-center gap-3 h-10 px-12 text-[13px] font-semibold animate-slide-down', style: { background: 'linear-gradient(90deg, color-mix(in oklab, var(--accent) 30%, var(--s1)), color-mix(in oklab, var(--accent) 55%, var(--s1)), color-mix(in oklab, var(--accent) 30%, var(--s1)))', backgroundSize: '200% 100%' } }, ...children);
     if (status === 'available') {
@@ -63,7 +72,7 @@ export function updateBanner(): HTMLElement & { draw(): void } {
           emit('update');
         } }, icon(X, 16)),
       ));
-    } else if (status === 'downloading') wrap.append(bar(h('span', {}, `Baixando a versão ${version}... ${percent ?? 0}%`)));
+    } else if (status === 'downloading') wrap.append(bar(h('span', { 'data-progress': '' }, `Baixando a versão ${version}... ${percent ?? 0}%`)));
     else if (status === 'ready') wrap.append(bar(h('span', {}, 'Instalando a atualização. O app vai reiniciar.')));
   };
   draw();
@@ -149,7 +158,12 @@ export function openEntry(r: RoomEntry): void {
 
 export function rail(): HTMLElement & { draw(animate?: boolean, pop?: boolean): void } {
   const el = h('nav', { class: 'w-[72px] bg-s0 flex flex-col items-center gap-2 py-3 overflow-y-auto flex-none', 'aria-label': 'Salas' });
+  let shown = '';
   const draw = (animate = false, pop = false) => {
+    // nothing it shows changed: the buttons stay (rebuilding them under the pointer lost their hover and made them jump)
+    const sig = JSON.stringify([S.view, S.session?.inviteCode ?? '', roomEntries().map((r) => [r.key, r.name, r.kind, r.state, r.count, r.icon, r.hue]), S.sideCollapsed, S.update.status, S.cfg.name, S.cfg.avatar?.length ?? 0]);
+    if (sig === shown && !animate && !pop) return;
+    shown = sig;
     el.replaceChildren();
     let i = 0;
     const stagger = () => ({ animationDelay: `${i++ * 55}ms` });
@@ -283,7 +297,7 @@ export function sidebar(): HTMLElement & { draw(animate?: boolean): void; tick()
             h('div', { class: 'flex items-center gap-1.5' }, h('span', { class: 'font-semibold truncate' }, isMe(p) ? `${p.name} (você)` : p.name), h('span', { class: 'badge-live flex-none whitespace-nowrap !text-[9px] !px-1.5 !py-0.5 !leading-none' }, 'AO VIVO')),
             h('div', { class: 'text-[12px] text-muted truncate' }, `${p.share!.resolution} · ${p.share!.fps} fps${typeof p.share!.viewers === 'number' ? ` · ${p.share!.viewers} assistindo` : ''}`),
           ),
-          watching ? icon(Video, 16, 'text-accent flex-none') : null,
+          watching ? icon(p.share!.source === 'camera' ? Video : Monitor, 16, 'text-accent flex-none') : null,
         );
         // the profile menu is a sibling of the button (a button cannot sit inside another one)
         const liveKebab = h('button', { class: 'icon-btn opacity-0 group-hover:opacity-100 focus:opacity-100 flex-none', 'aria-label': `Opções do perfil de ${p.name}`, onclick: (e: Event) => { e.stopPropagation(); peerMenu(liveKebab, p); } }, icon(EllipsisVertical, 16));
@@ -354,7 +368,21 @@ export function sidebar(): HTMLElement & { draw(animate?: boolean): void; tick()
     );
   };
 
+  let shown = '';
+  /** Everything the column shows (the timer and the ms are updated in place by tick): when it did not change, nothing is rebuilt. */
+  const signature = () => {
+    const s = S.session;
+    const room = S.view === 'room' && s
+      ? [s.selfId, s.inviteCode, s.roomName, s.isHost, s.sharing, S.room?.code ?? '', S.cfg.fixedRooms.map((r) => r.name), S.cfg.favoriteRooms.map((f) => f.code),
+          [...s.peers.values()].map((p) => [p.peerId, p.name, p.avatar?.length ?? 0, p.share, p.quality, p.rtt !== null, s.watched.has(p.peerId)])]
+      : roomEntries().filter((r) => r.state === 'open').map((r) => [r.key, r.name, r.hue, r.icon, r.host, r.count]);
+    return JSON.stringify([S.view, room, S.cfg.name, S.cfg.avatar?.length ?? 0]);
+  };
   const draw = (animate = false) => {
+    // rebuilding the column under a resting pointer lost the hover of its buttons and made them jump: it is rebuilt only when something changed
+    const sig = signature();
+    if (sig === shown && !animate) return tick();
+    shown = sig;
     document.querySelector('.peer-menu')?.remove();
     const head = S.view === 'room' && S.session ? drawRoom(animate) : drawHome(animate);
     inner.replaceChildren(head, body, userPanel());

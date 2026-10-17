@@ -5,6 +5,39 @@ export const HEARTBEAT_MS = 15000;
 export const DEFAULT_PORT = 47800;
 export const MAX_ROOM_NAME = 32;
 
+/** The pictures a room can have in the new interface. The owner picks one when the room is created and everybody in the room sees that one. */
+export const ROOM_ICON_KEYS = ['film', 'gamepad', 'book', 'music', 'users', 'tv', 'popcorn', 'headphones', 'swords', 'dices', 'trophy', 'rocket', 'code', 'palette', 'graduation', 'coffee', 'pizza', 'heart', 'flame', 'moon'] as const;
+/** The picture of a room that has none (rooms made before the pictures existed, or by an app that does not send one). */
+export const DEFAULT_ROOM_ICON = 'users';
+/** A picture key the app knows, or undefined. */
+export const cleanRoomIcon = (raw: unknown): string | undefined => ((ROOM_ICON_KEYS as readonly string[]).includes(String(raw)) ? (raw as string) : undefined);
+
+/** Room notices: a short text any participant pins for everybody for a while (hours and minutes). */
+export const MAX_NOTICE_TEXT = 140;
+export const MAX_NOTICE_MS = 24 * 60 * 60 * 1000;
+export const MAX_NOTICES_PER_PEER = 3;
+
+export interface RoomNotice {
+  id: string;
+  text: string;
+  /** Time left when the message was sent; each app turns it into its own deadline, so clocks that differ between PCs do not matter. */
+  remainingMs: number;
+  /** How long the notice was pinned for in all (the bar of time left); never less than remainingMs. */
+  totalMs: number;
+}
+
+/** The notice a client sent, or null when it is not valid. Used by every room server, so the limits are the same everywhere. */
+export function cleanNotice(raw: unknown): RoomNotice | null {
+  const n = (raw ?? {}) as Partial<RoomNotice>;
+  const text = typeof n.text === 'string' ? n.text.replace(/\s+/g, ' ').trim().slice(0, MAX_NOTICE_TEXT) : '';
+  const id = typeof n.id === 'string' ? n.id.replace(/[^a-zA-Z0-9-]/g, '').slice(0, 36) : '';
+  if (!text || !id || typeof n.remainingMs !== 'number' || !Number.isFinite(n.remainingMs)) return null;
+  const remainingMs = Math.min(Math.floor(n.remainingMs), MAX_NOTICE_MS);
+  const total = typeof n.totalMs === 'number' && Number.isFinite(n.totalMs) ? Math.floor(n.totalMs) : remainingMs;
+  const totalMs = Math.min(Math.max(total, remainingMs), MAX_NOTICE_MS);
+  return remainingMs >= 1000 ? { id, text, remainingMs, totalMs } : null;
+}
+
 /** The sound cues of the app (see renderer/sounds.ts). Each one can be switched off in Settings > Notificações. */
 export const SOUND_NAMES = [
   'self-join',
@@ -15,6 +48,7 @@ export const SOUND_NAMES = [
   'self-share-stop',
   'peer-share-start',
   'peer-share-stop',
+  'notice',
 ] as const;
 export type SoundName = (typeof SOUND_NAMES)[number];
 
@@ -53,6 +87,8 @@ export type MessageType =
   | 'profile-update'
   | 'share-started'
   | 'share-stopped'
+  | 'notice-add'
+  | 'notice-remove'
   | 'watch'
   | 'unwatch'
   | 'offer'
@@ -73,6 +109,8 @@ export const CLIENT_TYPES: ReadonlySet<string> = new Set([
   'profile-update',
   'share-started',
   'share-stopped',
+  'notice-add',
+  'notice-remove',
   'watch',
   'unwatch',
   'offer',
@@ -109,6 +147,8 @@ export interface RoomStatus {
   name?: string;
   hostName?: string;
   count?: number;
+  /** The picture the owner chose for the room (absent on Workers that do not know pictures yet). */
+  icon?: string;
 }
 
 export const MAX_FAVORITE_ROOMS = 20;
@@ -122,7 +162,7 @@ export interface DiscordResult {
 export interface FixedRoom {
   id: string;
   name: string;
-  /** The picture of the room in the new interface (one of ROOM_ICON_KEYS); empty means the interface picks one from the name. */
+  /** The picture of the room in the new interface (one of ROOM_ICON_KEYS); empty means the default picture. */
   icon?: string;
   /**
    * The Discord webhook of THIS room, encrypted with the operating system (safeStorage); when set, opening the room posts a notice in
@@ -161,6 +201,8 @@ export interface AppConfig {
   roomName: string;
   /** Volume of the sound effects, 0-100. */
   soundVolume: number;
+  /** Volume of the room-notice sound on top of soundVolume, 0-100 (100 = as loud as the other sounds). */
+  noticeSoundVolume: number;
   /** Cues switched off by the user. */
   disabledSounds: SoundName[];
   /** How rooms connect: "direct" (own server on the host; Radmin/VPN when needed; the default) or "cloudflare" (the owner's Worker). */

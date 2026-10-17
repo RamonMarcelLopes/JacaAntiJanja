@@ -4,7 +4,7 @@ import { initFx } from './fx';
 import { pollRooms, startPolling } from './flows';
 import { emit, loadConfig, roomEntries, S, subscribe } from './state';
 import { loadTheme } from './themes';
-import { setDisabledSounds, setSoundVolume } from '../renderer/sounds';
+import { setDisabledSounds, setNoticeSoundVolume, setSoundVolume } from '../renderer/sounds';
 import { home } from './ui/home';
 import { panel } from './ui/panel';
 import { captureFly, playFly, rail, sidebar, titlebar, updateBanner } from './ui/shell';
@@ -30,6 +30,7 @@ async function boot(): Promise<void> {
 
   await loadConfig();
   setSoundVolume(S.cfg.soundVolume);
+  setNoticeSoundVolume(S.cfg.noticeSoundVolume ?? 100);
   setDisabledSounds(S.cfg.disabledSounds);
   S.version = await window.jaca.getVersion();
   S.update = await window.jaca.getUpdateState();

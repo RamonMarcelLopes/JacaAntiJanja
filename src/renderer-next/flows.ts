@@ -1,6 +1,6 @@
 // What happens when a person starts a room, joins one or leaves: the same steps as the original interface, without any screen in them.
 import { encodeCloudInvite, encodeInvite, parseInvite } from '../shared/invite';
-import { AppConfig, FixedRoom, RoomInfo } from '../shared/protocol';
+import { AppConfig, cleanRoomIcon, DEFAULT_ROOM_ICON, FixedRoom, RoomInfo } from '../shared/protocol';
 import { diagnoseCloud } from '../renderer/cloud-diagnose';
 import { playSound } from '../renderer/sounds';
 import { Session } from '../renderer/session';
@@ -24,6 +24,8 @@ export function enterRoom(session: Session, room: RoomInfo | null): void {
   S.panel = false;
   session.onChange = () => emit('session');
   session.onNotice = (text, kind) => toast(text, kind === 'error' ? 'warn' : 'info');
+  // a notice pinned just now (yours or somebody's) has its own sound; quiet while a whole screen is shared, or it would go into the stream
+  session.onRoomNoticeAdded = () => !session.muteIncoming && playSound('notice');
   session.onEnded = async (reason) => {
     playSound('self-leave'); // leaving, the room being closed or the connection dropping
     if (session.isHost) await window.jaca.closeRoom();
@@ -86,11 +88,13 @@ export async function createRoom(opts: CreateOptions): Promise<boolean> {
       if (!fixed) throw new Error('Essa sala fixa não existe mais.');
     }
     const roomName = fixed ? fixed.name : typedName;
-    const room = await window.jaca.createRoom(roomName, fixed?.id, opts.takeover);
+    // the picture is chosen here, once, and travels with the room: everybody who joins sees this same one (a fixed room without one gets the default)
+    const roomIcon = cleanRoomIcon(fixed ? fixed.icon : opts.icon) ?? DEFAULT_ROOM_ICON;
+    const room = await window.jaca.createRoom(roomName, fixed?.id, opts.takeover, roomIcon);
     // Cloudflare mode: the owner's Worker is the room server (the key is inside wsUrl and never shown); direct mode: our own local server
     const session =
       room.mode === 'cloudflare'
-        ? await Session.join(room.wsUrl!, 0, S.cfg, true, room.code, { roomName })
+        ? await Session.join(room.wsUrl!, 0, S.cfg, true, room.code, { roomName, roomIcon })
         : await Session.join(`ws://127.0.0.1:${room.port}`, room.token, S.cfg, true);
     room.warnings.forEach((w) => toast(w, 'warn'));
     if (!fixed && opts.icon) S.tempIcon = opts.icon;

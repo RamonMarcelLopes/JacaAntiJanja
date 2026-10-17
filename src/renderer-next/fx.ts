@@ -46,10 +46,15 @@ export function initFx(): void {
     document.body.append(tip);
     const r = t.getBoundingClientRect();
     const side = t.dataset.tipSide ?? 'top';
-    const tr = tip.getBoundingClientRect();
-    if (side === 'right') { tip.style.left = `${r.right + 10}px`; tip.style.top = `${r.top + r.height / 2 - tr.height / 2}px`; }
-    else if (side === 'bottom') { tip.style.left = `${r.left + r.width / 2 - tr.width / 2}px`; tip.style.top = `${r.bottom + 8}px`; }
-    else { tip.style.left = `${r.left + r.width / 2 - tr.width / 2}px`; tip.style.top = `${r.top - tr.height - 8}px`; }
+    const tr = { width: tip.offsetWidth, height: tip.offsetHeight }; // the real size: the tooltip pops in from a smaller scale, so its box is still small here
+    let left: number;
+    let top: number;
+    if (side === 'right') { left = r.right + 10; top = r.top + r.height / 2 - tr.height / 2; }
+    else if (side === 'bottom') { left = r.left + r.width / 2 - tr.width / 2; top = r.bottom + 8; }
+    else { left = r.left + r.width / 2 - tr.width / 2; top = r.top - tr.height - 8; }
+    // a button near the edge of the window (the details button, at the right) would push half of its tooltip out: it is kept inside
+    tip.style.left = `${Math.max(8, Math.min(left, innerWidth - tr.width - 8))}px`;
+    tip.style.top = `${Math.max(8, Math.min(top, innerHeight - tr.height - 8))}px`;
   });
   body.addEventListener('pointerout', (e) => {
     if (tipFor && !tipFor.contains(e.relatedTarget as Node | null)) hideTip(); // the pointer left the element for good (not just for one of its children)
