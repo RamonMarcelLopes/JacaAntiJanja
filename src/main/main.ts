@@ -10,12 +10,16 @@ import { encodeCloudInvite, encodeInvite, isValidSubdomain, parseInvite, parseWo
 import { cleanFavorites, cleanFixedRooms } from '../shared/rooms';
 import { AppConfig, CaptureSource, ConnectivityResult, DEFAULT_PORT, DiscordResult, FavoriteRoom, FixedRoom, FixedRoomInput, FixedRoomSaveResult, MAX_FAVORITE_ROOMS, MAX_FIXED_ROOMS, MAX_ROOM_NAME, RoomInfo, RoomStatus, SOUND_NAMES } from '../shared/protocol';
 import { startAudio, stopAudio } from './audio';
-import { deleteWorkerBackup, loadWorkerBackup, saveWorkerBackup, updateWorkerBackupMode } from './worker-backup';
+import { readConfig, writeConfig } from './config-store';
+import { readRoomsBackup, writeRoomsBackup } from './rooms-backup';
+import { backupDir, deleteWorkerBackup, loadWorkerBackup, saveWorkerBackup, updateWorkerBackupMode } from './worker-backup';
 import { checkForUpdates, currentUpdateState, initUpdater, installUpdate } from './updater';
 import { detectVpnAddresses, discoverPublicIp, ensureFirewallRule, isPrivateIpv4, localIpv4Addresses, mapPortUpnp, natMappingTest, PortMapping, tcpProbe } from './network';
 import { SignalingServer } from './signaling';
 
 const DEFAULT_CONFIG: AppConfig = {
+  ui: 'legacy',
+  newUiSeen: false,
   name: '',
   avatar: null,
   port: DEFAULT_PORT,
@@ -105,15 +109,54 @@ async function environmentSnapshot(sampleUrl: string): Promise<string> {
   return parts.join('; ');
 }
 
+/** The last config that was read or saved successfully: used when the file cannot be read for a moment, so a failed read never looks like "no config". */
+let lastGoodConfig: AppConfig | null = null;
+
 function loadConfig(): AppConfig {
-  try {
-    const cfg: AppConfig = { ...DEFAULT_CONFIG, ...JSON.parse(fs.readFileSync(configPath(), 'utf8')) };
-    // Cloudflare mode only works with the account name and the owner key; without them the mode is Direto
-    if (cfg.connectionMode === 'cloudflare' && (!cfg.workerSubdomain || !cfg.workerOwnerKeyEnc)) cfg.connectionMode = 'direct';
-    return cfg;
-  } catch {
-    return { ...DEFAULT_CONFIG };
+  const read = readConfig(configPath());
+  let cfg: AppConfig;
+  if (read.status === 'ok') {
+    cfg = { ...DEFAULT_CONFIG, ...read.value } as AppConfig;
+    if (read.from === 'backup') {
+      logEvent('erro', 'config.json estava ilegível; usei a cópia da última gravação boa (config.json.bak)');
+      try {
+        writeConfig(configPath(), cfg); // the recovered config becomes config.json again
+      } catch {
+        /* read-only for now: the copy is still used in memory */
+      }
+    }
+  } else if (read.status === 'unreadable' && lastGoodConfig) {
+    logEvent('erro', `config.json não pôde ser lido (${read.reason}); usei a última configuração boa da memória`);
+    cfg = lastGoodConfig;
+  } else {
+    if (read.status === 'unreadable') logEvent('erro', `config.json não pôde ser lido (${read.reason}) e não há cópia; começando do zero`);
+    cfg = { ...DEFAULT_CONFIG };
   }
+  if (cfg.ui === 'next') cfg.newUiSeen = true; // an interface that is open has been seen, whatever the file says
+  // Cloudflare mode only works with the account name and the owner key; without them the mode is Direto
+  if (cfg.connectionMode === 'cloudflare' && (!cfg.workerSubdomain || !cfg.workerOwnerKeyEnc)) cfg.connectionMode = 'direct';
+  lastGoodConfig = cfg;
+  return cfg;
+}
+
+/**
+ * Favorite and fixed rooms live in a second copy outside the app's data folder, so a reinstall or a lost config.json does not take them away.
+ * Called at start before anything is saved: when the config has no rooms and the copy has some, they come back.
+ */
+function restoreRoomsBackup(): void {
+  const cfg = loadConfig();
+  const copy = readRoomsBackup(backupDir());
+  if (!copy) return;
+  const patch: Partial<AppConfig> = {};
+  if (!cfg.favoriteRooms.length && copy.favoriteRooms.length) patch.favoriteRooms = copy.favoriteRooms;
+  if (!cfg.fixedRooms.length && copy.fixedRooms.length) patch.fixedRooms = copy.fixedRooms.map((r) => ({ ...r, discordWebhookEnc: '' }));
+  if (!cfg.newUiSeen && copy.newUiSeen) {
+    patch.newUiSeen = true; // the interface choice survives a reinstall too
+    patch.ui = copy.ui === 'next' ? 'next' : 'legacy';
+  }
+  if (!Object.keys(patch).length) return;
+  saveConfig(patch);
+  logEvent('config', `salas recuperadas da cópia de segurança: ${patch.favoriteRooms?.length ?? 0} favoritas, ${patch.fixedRooms?.length ?? 0} fixas`);
 }
 
 function saveConfig(patch: Partial<AppConfig>): AppConfig {
@@ -123,6 +166,8 @@ function saveConfig(patch: Partial<AppConfig>): AppConfig {
   const volume = Number(next.soundVolume);
   next.soundVolume = Number.isFinite(volume) ? Math.min(100, Math.max(0, Math.round(volume))) : 60;
   next.disabledSounds = Array.isArray(next.disabledSounds) ? [...new Set(next.disabledSounds.filter((n) => (SOUND_NAMES as readonly string[]).includes(n)))] : [];
+  next.ui = next.ui === 'next' ? 'next' : 'legacy';
+  next.newUiSeen = next.newUiSeen === true || next.ui === 'next'; // having opened the new interface is remembered for good
   next.connectionMode = next.connectionMode === 'cloudflare' ? 'cloudflare' : 'direct';
   const subdomain = String(next.workerSubdomain ?? '').trim().toLowerCase();
   next.workerSubdomain = isValidSubdomain(subdomain) ? subdomain : '';
@@ -135,8 +180,9 @@ function saveConfig(patch: Partial<AppConfig>): AppConfig {
   next.defaultCameraId = typeof next.defaultCameraId === 'string' && next.defaultCameraId.startsWith('camera:') ? next.defaultCameraId.slice(0, 300) : '';
   const port = Number(next.port);
   next.port = Number.isInteger(port) && port >= 1024 && port <= 65535 ? port : DEFAULT_PORT;
-  fs.mkdirSync(path.dirname(configPath()), { recursive: true });
-  fs.writeFileSync(configPath(), JSON.stringify(next, null, 2));
+  writeConfig(configPath(), next);
+  writeRoomsBackup(backupDir(), next.favoriteRooms, next.fixedRooms, { ui: next.ui, newUiSeen: next.newUiSeen });
+  lastGoodConfig = next;
   return next;
 }
 
@@ -600,13 +646,21 @@ async function listSources(kind?: unknown): Promise<CaptureSource[]> {
 
 function registerIpc(): void {
   ipcMain.handle('config:get', () => publicConfig(loadConfig()));
+  // Changing the interface reloads the window, so it is refused while this PC hosts a room (the window of a guest checks it before asking)
+  ipcMain.handle('ui:set', (_e, ui: unknown): boolean => {
+    if ((ui !== 'legacy' && ui !== 'next') || server) return false;
+    saveConfig({ ui });
+    logEvent('config', `interface trocada para ${ui === 'next' ? 'a nova' : 'a original'}`);
+    loadInterface();
+    return true;
+  });
   // the Worker address and owner key can only change through worker:save / worker:clear (which check them first)
   ipcMain.handle('config:set', (_e, patch: Partial<AppConfig>) => {
-    const { workerSubdomain: _s, workerOwnerKeyEnc: _k, ...allowed } = patch ?? {};
+    const { workerSubdomain: _s, workerOwnerKeyEnc: _k, ui: _ui, newUiSeen: _seen, ...allowed } = patch ?? {}; // the interface changes only through ui:set (it reloads the window)
     if (Array.isArray(allowed.fixedRooms)) {
       // the window only knows 'set' / '' for a room's webhook: whatever it sends back, each room keeps the address it already has
       const current = loadConfig().fixedRooms;
-      allowed.fixedRooms = allowed.fixedRooms.map((r) => ({ id: r.id, name: r.name, discordWebhookEnc: current.find((c) => c.id === r.id)?.discordWebhookEnc ?? '' }));
+      allowed.fixedRooms = allowed.fixedRooms.map((r) => ({ id: r.id, name: r.name, icon: r.icon, discordWebhookEnc: current.find((c) => c.id === r.id)?.discordWebhookEnc ?? '' }));
     }
     const before = loadConfig();
     const saved = saveConfig(allowed);
@@ -782,7 +836,7 @@ function registerIpc(): void {
       message = 'Webhook testado e guardado (criptografado neste PC).';
     }
     const id = existing?.id ?? roomIdFromBytes(randomBytes(7));
-    const room: FixedRoom = { id, name, discordWebhookEnc: webhookEnc };
+    const room: FixedRoom = { id, name, icon: typeof input.icon === 'string' ? input.icon : existing?.icon, discordWebhookEnc: webhookEnc };
     saveConfig({ fixedRooms: existing ? cfg.fixedRooms.map((r) => (r.id === id ? room : r)) : [...cfg.fixedRooms, room] });
     return { ok: true, id, message };
   });
@@ -888,6 +942,12 @@ function setupSession(): void {
   });
 }
 
+/** Loads the page of the interface chosen in the config: the original one (renderer) or the new one (renderer-next). */
+function loadInterface(): void {
+  const folder = loadConfig().ui === 'next' ? 'renderer-next' : 'renderer';
+  void win?.loadFile(path.join(__dirname, '..', folder, 'index.html'));
+}
+
 function createWindow(): void {
   win = new BrowserWindow({
     width: 1180,
@@ -910,7 +970,7 @@ function createWindow(): void {
     if (/^https?:\/\//.test(url)) shell.openExternal(url);
     return { action: 'deny' };
   });
-  win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+  loadInterface();
   win.on('maximize', () => win?.webContents.send('window:maximized', true));
   win.on('unmaximize', () => win?.webContents.send('window:maximized', false));
   win.on('closed', () => (win = null));
@@ -974,6 +1034,7 @@ if (!gotLock) {
     logEvent('info', `app aberto (${app.isPackaged ? 'instalado' : 'desenvolvimento'}) em windows ${os.release()} ${os.arch()}, idioma ${app.getLocale()}`);
     logEvent('app', `electron ${process.versions.electron}, chromium ${process.versions.chrome}, node ${process.versions.node}; memória ${Math.round(os.totalmem() / 1048576)} MB; ${os.cpus().length} núcleos (${os.cpus()[0]?.model?.trim() ?? '?'}); telas ${screen.getAllDisplays().length}`);
     logEvent('config', `ao abrir: ${configSummary(loadConfig())}`);
+    restoreRoomsBackup(); // before anything is saved: a config that lost its rooms gets them back
     await restoreWorkerBackup(); // before the window asks for the config
     registerIpc();
     setupSession();

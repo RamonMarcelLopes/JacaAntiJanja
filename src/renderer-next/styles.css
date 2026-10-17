@@ -1,0 +1,336 @@
+@import 'tailwindcss' source(none);
+@source './**/*.ts';
+
+/* ------------------------------------------------------------------ tokens
+   One accent color drives every surface: switching the theme only changes --accent (see themes.ts). */
+@theme {
+  --font-sans: 'Segoe UI Variable Text', 'Segoe UI', Inter, system-ui, sans-serif;
+  --font-display: 'Segoe UI Variable Display', 'Segoe UI', system-ui, sans-serif;
+
+  --color-s0: var(--s0);
+  --color-s1: var(--s1);
+  --color-s2: var(--s2);
+  --color-s3: var(--s3);
+  --color-s4: var(--s4);
+  --color-line: var(--line);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-fg: var(--accent-fg);
+  --color-live: var(--live);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+
+  --animate-pop: pop 0.42s var(--ease-spring) both;
+  --animate-fade-up: fade-up 0.5s var(--ease-out-expo) both;
+  --animate-fade-in: fade-in 0.3s ease-out both;
+  /* entrance of the rows of a scrolling panel: it comes from ABOVE, so the page never gets taller while it plays (a scrollbar would flash) */
+  --animate-row-in: row-in 0.45s var(--ease-out-expo) both;
+  --animate-slide-right: slide-right 0.5s var(--ease-out-expo) both;
+  --animate-slide-down: slide-down 0.5s var(--ease-out-expo) both;
+  --animate-shimmer: shimmer 1.6s linear infinite;
+  --animate-pulse-dot: pulse-dot 1.8s ease-in-out infinite;
+  --animate-float: float 5s ease-in-out infinite;
+  --animate-spin-slow: spin 6s linear infinite;
+  --animate-bars: bars 0.9s ease-in-out infinite;
+  --animate-blink: blink 1s steps(2, start) infinite;
+  --animate-wiggle: wiggle 0.6s ease-in-out;
+
+  @keyframes pop { 0% { opacity: 0; transform: scale(0.82) translateY(8px); } 100% { opacity: 1; transform: none; } }
+  @keyframes fade-up { 0% { opacity: 0; transform: translateY(14px); } 100% { opacity: 1; transform: none; } }
+  @keyframes row-in { 0% { opacity: 0; transform: translateY(-12px); } 100% { opacity: 1; transform: none; } }
+  @keyframes fade-in { 0% { opacity: 0; } 100% { opacity: 1; } }
+  @keyframes slide-right { 0% { opacity: 0; transform: translateX(-18px); } 100% { opacity: 1; transform: none; } }
+  @keyframes slide-down { 0% { opacity: 0; transform: translateY(-100%); } 100% { opacity: 1; transform: none; } }
+  @keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+  @keyframes pulse-dot { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.7); opacity: 0.45; } }
+  @keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+  @keyframes bars { 0%, 100% { transform: scaleY(0.25); } 50% { transform: scaleY(1); } }
+  @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+  @keyframes wiggle { 0%, 100% { transform: rotate(0); } 20% { transform: rotate(-9deg); } 40% { transform: rotate(8deg); } 60% { transform: rotate(-5deg); } 80% { transform: rotate(3deg); } }
+}
+
+@property --angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+
+:root {
+  color-scheme: dark;
+  --accent: #9cff8c; /* green: the color the interface starts with (themes.ts) */
+  --accent-fg: color-mix(in oklab, var(--accent) 12%, #0a0a12);
+  --s0: color-mix(in oklab, var(--accent) 5%, #07080b);
+  --s1: color-mix(in oklab, var(--accent) 6%, #0f1014);
+  --s2: color-mix(in oklab, var(--accent) 5%, #14151a);
+  --s3: color-mix(in oklab, var(--accent) 7%, #1b1c23);
+  --s4: color-mix(in oklab, var(--accent) 10%, #252630);
+  --line: color-mix(in oklab, var(--accent) 12%, #2c2d37);
+  --fg: #f2f3f7;
+  --muted: #9b9dab;
+  --live: #ff5468;
+  --ok: #4ade80;
+  --warn: #fbbf24;
+}
+
+html, body, #app { height: 100%; }
+body {
+  margin: 0;
+  background: var(--s0);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  overflow: hidden;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+input, textarea { user-select: text; }
+/* no font/color here: an unlayered rule beats every @layer rule, and it used to turn the text of .btn-primary white (Tailwind preflight already inherits both) */
+button { cursor: pointer; }
+* { box-sizing: border-box; scrollbar-width: thin; scrollbar-color: var(--s4) transparent; }
+::selection { background: color-mix(in oklab, var(--accent) 40%, transparent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* the theme change is a circle that grows from the swatch that was clicked (View Transitions API) */
+::view-transition-old(root), ::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
+::view-transition-new(root) { clip-path: circle(0 at var(--vx, 50%) var(--vy, 50%)); animation: reveal 0.85s var(--ease-out-expo) forwards; }
+@keyframes reveal { to { clip-path: circle(150vmax at var(--vx, 50%) var(--vy, 50%)); } }
+
+/* ------------------------------------------------------------------ reduced motion (system setting or the switch in Aparência) */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; scroll-behavior: auto !important; }
+}
+html.no-motion *, html.no-motion *::before, html.no-motion *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
+
+@layer components {
+  /* surfaces that react to the pointer: a soft light follows the cursor */
+  .spot { position: relative; isolation: isolate; }
+  .spot::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.25s;
+    background: radial-gradient(260px circle at var(--mx, 50%) var(--my, 50%), color-mix(in oklab, var(--accent) 22%, transparent), transparent 70%);
+    z-index: 1;
+  }
+  .spot:hover::after { opacity: 1; }
+
+  /* click ripple */
+  .ripple { position: relative; overflow: hidden; }
+  .ripple-dot {
+    position: absolute;
+    border-radius: 999px;
+    pointer-events: none;
+    background: color-mix(in oklab, var(--accent) 45%, white 10%);
+    opacity: 0.55;
+    transform: scale(0);
+    animation: ripple 0.65s var(--ease-out-expo) forwards;
+  }
+  @keyframes ripple { to { transform: scale(1); opacity: 0; } }
+
+  /* buttons */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem;
+    height: 2.25rem; padding: 0 1rem; border-radius: 0.5rem; border: 1px solid transparent;
+    font-weight: 600; font-size: 0.8125rem; white-space: nowrap;
+    transition: transform 0.18s var(--ease-spring), background-color 0.2s, border-color 0.2s, box-shadow 0.25s, color 0.2s;
+  }
+  .btn:hover { transform: translateY(-1px); }
+  .btn:active { transform: translateY(0) scale(0.97); }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+  .btn-primary { background: var(--accent); color: var(--accent-fg); box-shadow: 0 6px 18px -6px color-mix(in oklab, var(--accent) 70%, transparent); }
+  .btn-primary:hover:not(:disabled) { box-shadow: 0 10px 26px -6px color-mix(in oklab, var(--accent) 85%, transparent); filter: brightness(1.06); }
+  .btn-ghost { background: color-mix(in oklab, var(--accent) 12%, var(--s3)); border-color: color-mix(in oklab, var(--accent) 32%, var(--line)); color: color-mix(in oklab, var(--accent) 35%, var(--fg)); }
+  .btn-ghost:hover:not(:disabled) { background: color-mix(in oklab, var(--accent) 22%, var(--s3)); border-color: color-mix(in oklab, var(--accent) 65%, var(--line)); color: var(--fg); }
+  .btn-danger { background: color-mix(in oklab, var(--live) 18%, var(--s3)); color: #ffb3bd; border-color: color-mix(in oklab, var(--live) 40%, var(--line)); }
+  .btn-danger:hover:not(:disabled) { background: var(--live); color: #fff; }
+
+  .icon-btn {
+    display: grid; place-items: center; width: 2rem; height: 2rem; border-radius: 0.5rem; border: 0; background: transparent; color: var(--muted);
+    transition: background-color 0.18s, color 0.18s, transform 0.2s var(--ease-spring);
+  }
+  .icon-btn:hover { background: var(--s4); color: var(--fg); transform: scale(1.08); }
+  .icon-btn:active { transform: scale(0.92); }
+
+  /* inputs */
+  .field {
+    width: 100%; height: 2.5rem; padding: 0 0.75rem; border-radius: 0.5rem; background: var(--s0); border: 1px solid var(--line); color: var(--fg);
+    transition: border-color 0.2s, box-shadow 0.25s, background-color 0.2s;
+  }
+  .field:hover { border-color: color-mix(in oklab, var(--accent) 40%, var(--line)); }
+  .field:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 22%, transparent); background: color-mix(in oklab, var(--accent) 4%, var(--s0)); }
+
+  /* switch */
+  .switch { position: relative; width: 2.5rem; height: 1.45rem; border-radius: 999px; background: var(--s4); border: 1px solid var(--line); transition: background-color 0.25s, border-color 0.25s; flex: none; }
+  .switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 1.05rem; height: 1.05rem; border-radius: 999px; background: #cfd0da; transition: transform 0.35s var(--ease-spring), background-color 0.2s, width 0.2s; }
+  .switch:active::after { width: 1.3rem; }
+  .switch[aria-checked='true'] { background: var(--accent); border-color: var(--accent); }
+  .switch[aria-checked='true']::after { transform: translateX(1.05rem); background: var(--accent-fg); }
+  .switch[aria-checked='true']:active::after { transform: translateX(0.8rem); }
+
+  /* slider */
+  .range { -webkit-appearance: none; appearance: none; width: 100%; height: 0.375rem; border-radius: 999px; background: linear-gradient(to right, var(--accent) var(--v, 50%), var(--s4) var(--v, 50%)); outline: none; }
+  .range::-webkit-slider-thumb { -webkit-appearance: none; width: 0.9rem; height: 0.9rem; border-radius: 999px; background: #fff; border: 0; box-shadow: 0 2px 8px #0008; transition: transform 0.2s var(--ease-spring); }
+  .range:hover::-webkit-slider-thumb { transform: scale(1.3); }
+
+  /* avatar */
+  .avatar { position: relative; display: grid; place-items: center; border-radius: 999px; font-weight: 700; color: #fff; flex: none; text-shadow: 0 1px 2px #0006; }
+  .avatar > .status { position: absolute; right: -2px; bottom: -2px; width: 0.8em; height: 0.8em; min-width: 9px; min-height: 9px; border-radius: 999px; border: 2px solid var(--s1); }
+
+  /* live tile: a bright edge travels around it */
+  .live-edge { position: absolute; inset: -2px; border-radius: inherit; padding: 2px; pointer-events: none; z-index: 3;
+    background: conic-gradient(from var(--angle), var(--live), var(--accent), transparent 40%, var(--live));
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude;
+    animation: edge-spin 3.5s linear infinite; }
+  @keyframes edge-spin { to { --angle: 360deg; } }
+
+  /* a closed room reads as closed at a glance: dashed border, no color on the icon, a lock pill and a dead button */
+  .room-closed { border-style: dashed; border-color: color-mix(in oklab, var(--fg) 22%, transparent); background: color-mix(in oklab, var(--s1) 70%, var(--s3)); cursor: default; }
+  .closed-pill { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.1rem 0.5rem; border-radius: 999px; background: color-mix(in oklab, var(--fg) 12%, transparent); color: var(--fg); font-size: 0.6875rem; font-weight: 800; letter-spacing: 0.06em; }
+  .closed-btn { background: transparent; border: 1px dashed color-mix(in oklab, var(--fg) 28%, transparent); color: var(--muted); cursor: not-allowed; }
+  /* connection mode badge on the home: small, tinted with the accent so it stands out from the plain chips, clickable */
+  .mode-badge { display: inline-flex; align-items: center; gap: 0.4rem; height: 2rem; padding: 0 0.6rem 0 0.75rem; border-radius: 999px; font-size: 0.75rem; background: color-mix(in oklab, var(--accent) 14%, var(--s3)); border: 1px solid color-mix(in oklab, var(--accent) 50%, var(--line)); transition: transform 0.25s var(--ease-spring), border-color 0.2s, background-color 0.2s; }
+  .mode-badge:hover { transform: translateY(-1px); border-color: var(--accent); background: color-mix(in oklab, var(--accent) 22%, var(--s3)); }
+  .mode-badge:active { transform: scale(0.97); }
+  .badge-live { display: inline-flex; flex: none; white-space: nowrap; align-items: center; gap: 0.35rem; padding: 0.15rem 0.5rem; border-radius: 0.375rem; background: var(--live); color: #fff; font-size: 0.6875rem; font-weight: 800; letter-spacing: 0.06em; }
+  .badge-live::before { content: ''; flex: none; width: 0.4rem; height: 0.4rem; border-radius: 999px; background: #fff; animation: pulse-dot 1.4s ease-in-out infinite; }
+
+  /* the live picture fills its tile; the controls and the name float over it */
+  .tile video { background: #000; }
+  /* errors and warnings: red, in the same family as the live badge and the stop buttons */
+  .toast[data-kind='warn'] { border-color: color-mix(in oklab, var(--live) 60%, var(--line)); background: color-mix(in oklab, var(--live) 9%, var(--s3)); }
+  .toast[data-kind='warn']::after { background: var(--live); }
+  .toast[data-kind='ok']::after { background: var(--ok); }
+  /* the update/interface notice of the original interface lives there; nothing of it here */
+
+  /* tiles of the stage */
+  .tiles { container-type: size; display: flex; flex-wrap: wrap; justify-content: center; align-content: center; gap: 12px; padding: 14px; }
+  .tile {
+    position: relative; flex: none; aspect-ratio: 16 / 9; border-radius: 14px; background: var(--s3); border: 1px solid var(--line);
+    width: min(calc((100cqw - (var(--cols, 1) - 1) * 12px) / var(--cols, 1)), calc((100cqh - (var(--rows, 1) - 1) * 12px) / var(--rows, 1) * 16 / 9));
+    transform-style: preserve-3d; transition: border-color 0.25s, box-shadow 0.3s, transform 0.18s ease-out;
+    overflow: hidden;
+  }
+  .tile.big { width: min(100cqw, 100cqh * 16 / 9); }
+  .tile.fit-w { width: 100%; }
+  .tile.fit-w .tile-avatar > div { transform: scale(0.52); }
+  .tile:fullscreen { width: 100vw; height: 100vh; border-radius: 0; aspect-ratio: auto; }
+  .tile:hover { border-color: color-mix(in oklab, var(--accent) 55%, var(--line)); box-shadow: 0 18px 40px -18px color-mix(in oklab, var(--accent) 55%, transparent); }
+  .tile.live { overflow: visible; }
+  .tile .clip { position: absolute; inset: 0; border-radius: inherit; overflow: hidden; }
+  .tile .controls { opacity: 0; transform: translateY(8px); transition: opacity 0.22s, transform 0.3s var(--ease-spring); }
+  .tile:hover .controls { opacity: 1; transform: none; }
+
+  /* menus */
+  .menu { position: absolute; z-index: 85; /* above the settings layer (70) and the dialogs (80) it opens from */ min-width: 190px; max-height: 15rem; overflow-y: auto; padding: 6px; border-radius: 12px; background: color-mix(in oklab, var(--s2) 92%, transparent); backdrop-filter: blur(14px); border: 1px solid var(--line); box-shadow: 0 24px 60px -12px #000c; animation: menu-in 0.28s var(--ease-spring) both; transform-origin: left bottom; }
+  @keyframes menu-in { 0% { opacity: 0; transform: translateX(-10px) scale(0.92); } 100% { opacity: 1; transform: none; } }
+  .menu.closing { animation: menu-out 0.16s ease-in both; }
+  @keyframes menu-out { to { opacity: 0; transform: scale(0.94); } }
+  .menu-item { display: flex; align-items: center; gap: 0.625rem; width: 100%; height: 2.5rem; padding: 0 0.625rem; border-radius: 8px; border: 0; background: transparent; text-align: left; font-weight: 500; transition: background-color 0.15s, transform 0.2s var(--ease-spring); }
+  .menu-item:hover, .menu-item.open { background: color-mix(in oklab, var(--accent) 18%, var(--s3)); transform: translateX(2px); }
+
+  /* modal */
+  .backdrop { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 1.5rem; background: color-mix(in oklab, var(--s0) 70%, transparent); backdrop-filter: blur(8px); animation: fade-in 0.25s ease-out both; }
+  .backdrop.closing { animation: fade-out 0.2s ease-in both; }
+  @keyframes fade-out { to { opacity: 0; } }
+  .modal { width: min(560px, 100%); max-height: 100%; overflow: auto; border-radius: 18px; background: var(--s2); border: 1px solid color-mix(in oklab, var(--accent) 30%, var(--line)); box-shadow: 0 40px 100px -20px #000d, 0 0 80px -30px var(--accent); animation: pop 0.45s var(--ease-spring) both; }
+  .backdrop.closing .modal { animation: modal-out 0.2s ease-in both; }
+  @keyframes modal-out { to { opacity: 0; transform: scale(0.94) translateY(10px); } }
+
+  /* skeleton while thumbnails load */
+  .skeleton { background: linear-gradient(100deg, var(--s3) 30%, color-mix(in oklab, var(--accent) 14%, var(--s4)) 50%, var(--s3) 70%); background-size: 200% 100%; animation: shimmer 1.4s linear infinite; }
+
+  /* segmented control with a sliding highlight */
+  .seg { position: relative; display: inline-grid; grid-auto-flow: column; grid-auto-columns: 1fr; padding: 4px; border-radius: 999px; background: var(--s0); border: 1px solid var(--line); }
+  .seg::before { content: ''; position: absolute; top: 4px; bottom: 4px; left: 4px; width: calc((100% - 8px) / var(--n, 2)); border-radius: 999px; background: color-mix(in oklab, var(--accent) 24%, var(--s4)); transform: translateX(calc(var(--i, 0) * 100%)); transition: transform 0.45s var(--ease-spring); }
+  .seg > button { position: relative; z-index: 1; padding: 0.4rem 1rem; border: 0; background: transparent; border-radius: 999px; font-weight: 600; color: var(--muted); transition: color 0.2s; }
+  .seg > button[aria-selected='true'], .seg > button[aria-checked='true'] { color: var(--fg); }
+  .seg-sm > button { padding: 0.3rem 0.7rem; font-size: 13px; }
+  .seg > button { display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; }
+
+  /* animated background of the stage */
+  .aurora { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 0; }
+  .aurora i { position: absolute; width: 55%; aspect-ratio: 1; border-radius: 50%; filter: blur(90px); opacity: 0.22; background: var(--accent); }
+  .aurora i:nth-child(1) { left: -10%; top: -20%; animation: drift1 22s ease-in-out infinite alternate; }
+  .aurora i:nth-child(2) { right: -15%; bottom: -25%; background: color-mix(in oklab, var(--accent) 65%, #5ad1c8); animation: drift2 28s ease-in-out infinite alternate; }
+  .aurora i:nth-child(3) { left: 35%; top: 30%; width: 30%; opacity: 0.12; background: color-mix(in oklab, var(--accent) 60%, #f6e58d); animation: drift3 18s ease-in-out infinite alternate; }
+  html.no-aurora .aurora { display: none; }
+  @keyframes drift1 { to { transform: translate(25%, 30%) scale(1.25); } }
+  @keyframes drift2 { to { transform: translate(-30%, -20%) scale(1.15); } }
+  @keyframes drift3 { to { transform: translate(-20%, 25%) scale(0.8); } }
+
+
+  /* rail icon: circle that turns into a rounded square, with the pill on the left */
+  .rail-btn { position: relative; width: 48px; height: 48px; border-radius: 50%; border: 0; display: grid; place-items: center; font-weight: 700; color: #fff; background: var(--s3); transition: border-radius 0.35s var(--ease-spring), background-color 0.25s, transform 0.25s var(--ease-spring), box-shadow 0.3s; overflow: visible; }
+  .rail-btn:hover { border-radius: 16px; transform: translateY(-2px); box-shadow: 0 10px 24px -10px color-mix(in oklab, var(--accent) 70%, transparent); }
+  .rail-btn:active { transform: scale(0.94); }
+  .rail-btn[aria-current='true'] { border-radius: 16px; }
+  .rail-pill { position: absolute; left: -12px; top: 50%; width: 4px; height: 8px; border-radius: 0 4px 4px 0; background: var(--fg); transform: translateY(-50%); transition: height 0.35s var(--ease-spring), opacity 0.2s; opacity: 0; }
+  .rail-btn:hover .rail-pill { opacity: 1; height: 20px; }
+  .rail-btn[aria-current='true'] .rail-pill { opacity: 1; height: 36px; }
+  /* a room that is open right now: a plain green dot at the lower right corner (like a status badge) */
+  .rail-open-dot { position: absolute; right: -4px; bottom: -4px; z-index: 2; width: 18px; height: 18px; border-radius: 999px; background: var(--ok); border: 3.5px solid var(--s0); pointer-events: none; }
+
+  /* floating call bar */
+  .callbar { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 22px; background: color-mix(in oklab, var(--s1) 78%, transparent); backdrop-filter: blur(18px); border: 1px solid var(--line); box-shadow: 0 20px 50px -14px #000c; animation: fade-up 0.6s var(--ease-out-expo) both; }
+  .call-btn { position: relative; display: grid; place-items: center; width: 52px; height: 52px; border-radius: 50%; border: 0; background: var(--s4); color: var(--fg); transition: transform 0.28s var(--ease-spring), background-color 0.2s, border-radius 0.3s var(--ease-spring), box-shadow 0.3s; }
+  .call-btn:hover { transform: translateY(-4px) scale(1.1); border-radius: 18px; }
+  /* pressing the little arrow (which opens the menu, or does nothing when it is dimmed) is not pressing the button: no squeeze */
+  .call-btn:active:not(:has(.chev:active)) { transform: scale(0.92); }
+  .call-btn.on { background: var(--accent); color: var(--accent-fg); box-shadow: 0 10px 28px -8px var(--accent); }
+  .call-btn.stop { background: var(--live); color: #fff; }
+  .call-btn.leave { background: color-mix(in oklab, var(--live) 24%, var(--s4)); color: #ffb3bd; }
+  .call-btn.leave:hover { background: var(--live); color: #fff; }
+  .call-btn .chev { position: absolute; top: -4px; right: -4px; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 8px; background: var(--s2); border: 1px solid var(--line); color: var(--fg); transition: transform 0.25s var(--ease-spring), background-color 0.2s; }
+  .call-btn .chev:hover { transform: scale(1.18); background: var(--accent); color: var(--accent-fg); }
+  .call-btn .chev.open svg { transform: rotate(180deg); }
+  .call-btn .chev svg { transition: transform 0.3s var(--ease-spring); }
+
+  /* in focus the picture is clean: name, AO VIVO, viewers and the call bar only show while the pointer is over it */
+  .arena-focus .tile .tile-info { opacity: 0; transition: opacity 0.25s; }
+  .arena-focus .tile:hover .tile-info { opacity: 1; }
+  .tile.big .tile-stop { display: none; } /* in focus, stopping is the red button of the call bar (like the real app); the small X belongs to the grid */
+  .tile.big .badge-live { display: none; } /* the AO VIVO label is never shown on the picture in focus, not even on hover */
+  .arena-focus .callbar-wrap { opacity: 0; pointer-events: none; }
+  .arena-focus:hover .callbar-wrap, body.menu-open .arena-focus .callbar-wrap, .arena-focus .callbar-wrap:focus-within { opacity: 1; pointer-events: auto; }
+
+  .tooltip { position: absolute; z-index: 90; padding: 0.35rem 0.6rem; border-radius: 8px; background: #000d; color: #fff; font-size: 12px; font-weight: 600; pointer-events: none; animation: pop 0.2s var(--ease-spring) both; white-space: nowrap; }
+
+  .toast { display: flex; align-items: center; gap: 0.75rem; min-width: 260px; padding: 0.75rem 2.6rem 0.75rem 1rem; border-radius: 12px; background: var(--s3); border: 1px solid color-mix(in oklab, var(--accent) 40%, var(--line)); box-shadow: 0 18px 40px -14px #000d; animation: toast-in 0.5s var(--ease-spring) both; position: relative; overflow: hidden; }
+  .toast.closing { animation: toast-out 0.3s ease-in both; }
+  .toast::after { content: ''; position: absolute; left: 0; bottom: 0; height: 2px; width: 100%; background: var(--accent); transform-origin: left; animation: toast-bar var(--toast-ms, 4s) linear forwards; }
+  .toast:hover::after { animation-play-state: paused; }
+  .toast-close { position: absolute; right: 0.5rem; top: 0; bottom: 0; margin: auto 0; display: grid; place-items: center; width: 1.7rem; height: 1.7rem; border-radius: 0.5rem; border: 0; background: transparent; color: var(--muted); opacity: 0; transform: scale(0.7); transition: opacity 0.18s, transform 0.25s var(--ease-spring), background-color 0.15s, color 0.15s; }
+  .toast:hover .toast-close, .toast-close:focus-visible { opacity: 1; transform: none; }
+  .toast-close:hover { background: color-mix(in oklab, var(--fg) 14%, transparent); color: var(--fg); }
+  @keyframes toast-in { 0% { opacity: 0; transform: translateX(40px) scale(0.9); } 100% { opacity: 1; transform: none; } }
+  @keyframes toast-out { to { opacity: 0; transform: translateX(40px); } }
+  @keyframes toast-bar { to { transform: scaleX(0); } }
+
+  .confetti { position: fixed; z-index: 120; width: 7px; height: 7px; border-radius: 2px; pointer-events: none; animation: confetti 0.9s cubic-bezier(0.1, 0.8, 0.3, 1) forwards; }
+  @keyframes confetti { 0% { transform: translate(0, 0) rotate(0) scale(1); opacity: 1; } 100% { transform: translate(var(--dx), var(--dy)) rotate(var(--rot)) scale(0.4); opacity: 0; } }
+
+  /* the gear turns when the pointer is over it and spins once when it is pressed; the arrow of "sair da sala" leans out and shoots out when pressed */
+  .anim-gear svg { transition: transform 0.55s var(--ease-spring); }
+  .anim-gear:hover svg { transform: rotate(90deg); }
+  .anim-gear.go svg { animation: gear-spin 0.65s var(--ease-out-expo); }
+  @keyframes gear-spin { from { transform: rotate(0deg) scale(1); } 50% { transform: rotate(200deg) scale(1.2); } to { transform: rotate(360deg) scale(1); } }
+  .anim-leave svg { transition: transform 0.3s var(--ease-spring); }
+  .anim-leave:hover svg { transform: translateX(4px); }
+  .anim-leave.go svg { animation: leave-out 0.5s ease-in; }
+  @keyframes leave-out { 0% { transform: translateX(0); opacity: 1; } 45% { transform: translateX(10px); opacity: 0; } 46% { transform: translateX(-10px); opacity: 0; } 100% { transform: translateX(0); opacity: 1; } }
+
+  .digit-roll { display: inline-block; overflow: hidden; height: 1.2em; vertical-align: bottom; }
+  .digit-roll > span { display: block; transition: transform 0.45s var(--ease-spring); }
+
+  .view-enter { animation: view-in 0.55s var(--ease-out-expo) both; }
+  @keyframes view-in { 0% { opacity: 0; transform: translateY(12px) scale(0.985); } 100% { opacity: 1; transform: none; } }
+
+  .scroll-fade { mask-image: linear-gradient(to bottom, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%); }
+}

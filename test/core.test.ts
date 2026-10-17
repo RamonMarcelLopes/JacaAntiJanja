@@ -8,6 +8,11 @@ import { formatDuration } from '../src/shared/time';
 import { buildStunRequest, classifyVpnInterfaces, isCgnatRange, isPrivateIpv4, natVerdict, parseStunMapped, parseStunResponse } from '../src/main/network';
 import { SignalingServer } from '../src/main/signaling';
 import { JoinError, redact } from '../src/renderer/signaling-client';
+import { readConfig, writeConfig } from '../src/main/config-store';
+import { readRoomsBackup, writeRoomsBackup } from '../src/main/rooms-backup';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 test('invite code round-trips and is 16 chars in 4 groups', () => {
   const data = { ip: '201.17.5.250', port: 47800, token: 0xdeadbeef };
@@ -568,4 +573,76 @@ test('join errors carry what exactly happened, for the log and not for the scree
   assert.equal(e.detail, ''); // filled by the client with the phase, the times and the close codes
   e.detail = 'a conexão abriu em 273 ms, mas a sala não respondeu em 15 s';
   assert.equal(e.message, 'TIMEOUT'); // the text shown to the person is chosen elsewhere; the detail never leaks into it
+});
+
+const tempDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'jaj-unit-'));
+const FAV = { code: 'K7QM2-XRA9T@ramonlopesdev', name: 'Sexta do Filme' };
+
+test('config: a missing file is "no config yet", not an error', () => {
+  const dir = tempDir();
+  assert.deepEqual(readConfig(path.join(dir, 'config.json')), { status: 'missing' });
+});
+
+test('config: saving keeps the previous good file as config.json.bak and leaves no temporary file behind', () => {
+  const file = path.join(tempDir(), 'config.json');
+  writeConfig(file, { name: 'Ana', favoriteRooms: [FAV] });
+  writeConfig(file, { name: 'Ana', favoriteRooms: [FAV, { code: 'B5N7C-JT4HR@ramonlopesdev', name: 'Estudos' }] });
+  const bak = JSON.parse(fs.readFileSync(`${file}.bak`, 'utf8'));
+  assert.equal(bak.favoriteRooms.length, 1, 'the copy is the save before the last one');
+  assert.ok(!fs.existsSync(`${file}.tmp`));
+});
+
+test('config: a damaged config.json does not erase the favorites, the last good copy is used and the damaged file is kept aside', () => {
+  const dir = tempDir();
+  const file = path.join(dir, 'config.json');
+  writeConfig(file, { name: 'Ana', favoriteRooms: [FAV] });
+  writeConfig(file, { name: 'Ana', favoriteRooms: [FAV] }); // now a .bak exists
+  fs.writeFileSync(file, '{"name":"Ana","favoriteRooms":[{"code":"K7QM2-XR'); // cut in the middle, like a write interrupted by an update
+  const read = readConfig(file);
+  assert.equal(read.status, 'ok');
+  assert.equal((read as any).from, 'backup');
+  assert.deepEqual((read as any).value.favoriteRooms, [FAV]);
+  assert.ok(fs.readdirSync(dir).some((n) => /^config\.damaged-\d+\.json$/.test(n)), 'the damaged file is not destroyed');
+});
+
+test('config: damaged and without a copy is reported as unreadable (never as an empty config that the next save would write over)', () => {
+  const dir = tempDir();
+  const file = path.join(dir, 'config.json');
+  fs.writeFileSync(file, 'not json at all');
+  assert.equal(readConfig(file).status, 'unreadable');
+});
+
+test('rooms copy outside the app data: favorites and fixed rooms come back, the Discord webhook does not travel', () => {
+  const dir = tempDir();
+  writeRoomsBackup(dir, [FAV], [{ id: 'K7QM2XRA9T', name: 'Minha sala', discordWebhookEnc: 'SEGREDO' }]);
+  assert.ok(!fs.readFileSync(path.join(dir, 'rooms.json'), 'utf8').includes('SEGREDO'));
+  const back = readRoomsBackup(dir);
+  assert.deepEqual(back?.favoriteRooms, [FAV]);
+  assert.deepEqual(back?.fixedRooms, [{ id: 'K7QM2XRA9T', name: 'Minha sala' }]);
+  assert.equal(readRoomsBackup(tempDir()), null, 'no copy yet');
+});
+
+test('fixed rooms: the icon is kept only when it is one of the pictures the interface knows, and it survives the copy outside the app data', () => {
+  const rooms = cleanFixedRooms([
+    { id: 'K7QM2XRA9T', name: 'Com ícone', icon: 'popcorn', discordWebhookEnc: '' },
+    { id: 'B5N7CJT4HR', name: 'Ícone inventado', icon: 'not-an-icon', discordWebhookEnc: '' },
+    { id: 'D9F2GSM6YE', name: 'Sem ícone', discordWebhookEnc: '' },
+  ]);
+  assert.equal(rooms[0].icon, 'popcorn');
+  assert.equal(rooms[1].icon, undefined);
+  assert.equal(rooms[2].icon, undefined);
+  const dir = tempDir();
+  writeRoomsBackup(dir, [], rooms);
+  assert.equal(readRoomsBackup(dir)?.fixedRooms[0].icon, 'popcorn');
+});
+
+test('rooms copy outside the app data: it also remembers which interface was chosen and that the new one was already seen', () => {
+  const dir = tempDir();
+  writeRoomsBackup(dir, [], [], { ui: 'legacy', newUiSeen: true });
+  assert.equal(readRoomsBackup(dir)?.ui, 'legacy');
+  assert.equal(readRoomsBackup(dir)?.newUiSeen, true);
+  writeRoomsBackup(dir, [], [], { ui: 'next', newUiSeen: true });
+  assert.equal(readRoomsBackup(dir)?.ui, 'next');
+  writeRoomsBackup(dir, [], []);
+  assert.equal(readRoomsBackup(dir)?.newUiSeen, false);
 });

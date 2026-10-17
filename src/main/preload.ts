@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 contextBridge.exposeInMainWorld('jaca', {
   getConfig: () => ipcRenderer.invoke('config:get'),
+  setUi: (ui: 'legacy' | 'next') => ipcRenderer.invoke('ui:set', ui),
   setConfig: (patch: unknown) => ipcRenderer.invoke('config:set', patch),
   createRoom: (roomName: string, fixedId?: string, takeover?: boolean) => ipcRenderer.invoke('room:create', roomName, fixedId, takeover),
   closeRoom: () => ipcRenderer.invoke('room:close'),

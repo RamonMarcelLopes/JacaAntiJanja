@@ -3,7 +3,8 @@ import { toast } from './dom';
 import { playSound, setDisabledSounds, setSoundVolume } from './sounds';
 import { renderHome } from './screens/home';
 import { renderRoom } from './screens/room';
-import { renderSettings } from './screens/settings';
+import { openSettingsOnInterface, renderSettings } from './screens/settings';
+import { initUiNotice, setUiNoticeInRoom } from './ui-notice';
 import { Session } from './session';
 import { initTitlebar } from './titlebar';
 import { initUpdateBanner, setInRoom } from './update-banner';
@@ -63,6 +64,7 @@ async function update(patch: Partial<AppConfig>): Promise<AppConfig> {
 
 function showHome(): void {
   setInRoom(false);
+  setUiNoticeInRoom(false);
   // Settings sits to the LEFT of Home: coming back from it Home slides in from the right. From a room Home slides in from the left.
   const direction: Direction = current === 'settings' ? 'forward' : 'back';
   current = 'home';
@@ -95,8 +97,16 @@ function showSettings(): void {
   mount(view.el, view.dispose, 'back'); // Settings comes in from the left (left to right)
 }
 
+/** The notice about the new interface leads to Settings > Interface (a room has to be left first: switching reloads the window). */
+function openInterface(): void {
+  if (current === 'room') return toast('Saia da sala para trocar de interface.');
+  openSettingsOnInterface();
+  showSettings();
+}
+
 function showRoom(session: Session, room: RoomInfo | null): void {
   setInRoom(true);
+  setUiNoticeInRoom(true);
   const view = renderRoom({
     get cfg() {
       return cfg;
@@ -125,6 +135,7 @@ async function boot(): Promise<void> {
   setDisabledSounds(cfg.disabledSounds);
   initTitlebar();
   initUpdateBanner();
+  if (!cfg.newUiSeen) initUiNotice(openInterface); // who already opened the new interface (and may have come back) is not told about it again
   showHome();
 }
 

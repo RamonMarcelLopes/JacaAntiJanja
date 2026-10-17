@@ -77,7 +77,7 @@ test('settings has a left sidebar with an icon and a name per category, one pane
   try {
     await a.page.getByRole('button', { name: 'Configurações' }).click();
     const tabs = a.page.getByRole('tab');
-    await expect(tabs).toHaveText(['Rede', 'Salas fixas', 'Áudio', 'Notificações', 'Transmissão', 'Câmera', 'Sobre']);
+    await expect(tabs).toHaveText(['Rede', 'Salas fixas', 'Áudio', 'Notificações', 'Transmissão', 'Câmera', 'Interface', 'Sobre']);
     for (const tab of await tabs.all()) await expect(tab.locator('svg')).toHaveCount(1); // every entry has an icon
 
     // the sidebar is on the left of the content

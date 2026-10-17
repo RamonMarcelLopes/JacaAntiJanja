@@ -336,7 +336,7 @@ test('the settings open in a drawer inside the room: the back button works on it
   await gear.click();
   const drawer = host.page.locator('.settings-drawer');
   await expect(drawer).toBeVisible();
-  await expect(drawer.getByRole('tab')).toHaveText(['Rede', 'Salas fixas', 'Áudio', 'Notificações', 'Transmissão', 'Câmera', 'Sobre']);
+  await expect(drawer.getByRole('tab')).toHaveText(['Rede', 'Salas fixas', 'Áudio', 'Notificações', 'Transmissão', 'Câmera', 'Interface', 'Sobre']);
   await expect(host.page.locator('.code-chip')).toBeVisible(); // still in the room behind it
 
   // the window's title bar is a drag area that swallows clicks: the drawer starts under it, so the top of the back button works too

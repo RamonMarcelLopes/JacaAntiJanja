@@ -28,6 +28,9 @@ export async function launchApp(label: string, config?: Record<string, unknown>,
     window.addEventListener('jaca-sound', (e) => (window as any).__sounds.push((e as CustomEvent).detail));
   });
   await expect(page.getByRole('heading', { name: 'Seu perfil' })).toBeVisible();
+  // the notice about the new interface sits over the top right corner (it never closes by itself): a person closes it with its X, so do the tests
+  // (e2e/ui-notice.spec.ts is the one that looks at it, and asks to keep it with JACA_TEST_KEEP_UI_NOTICE)
+  if (!env.JACA_TEST_KEEP_UI_NOTICE) await page.locator('#ui-notice .ui-notice-close').click();
   return {
     app,
     page,

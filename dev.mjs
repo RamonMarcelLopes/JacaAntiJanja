@@ -13,7 +13,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, rmSync, watch, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { copyStatic, targets } from './build-config.mjs';
+import { buildNextStyles, copyStatic, targets } from './build-config.mjs';
 
 const profile = path.join(process.env.LOCALAPPDATA ?? os.tmpdir(), 'jaca-anti-janja-dev');
 mkdirSync(profile, { recursive: true });
@@ -129,7 +129,17 @@ async function watchTarget(name, onRebuilt) {
 await watchTarget('main', scheduleRestart);
 await watchTarget('preload', scheduleRestart);
 await watchTarget('renderer', () => scheduleReload('full'));
+await watchTarget('rendererNext', () => scheduleReload('full'));
 copyStatic();
+// the Tailwind styles of the new interface: built once, then rebuilt by the Tailwind CLI on every edit (the window swaps the CSS in place)
+buildNextStyles(false);
+const tailwind = spawn(process.execPath, ['node_modules/@tailwindcss/cli/dist/index.mjs', '-i', 'src/renderer-next/styles.css', '-o', 'dist/renderer-next/style.css', '--watch'], { stdio: 'ignore' });
+let nextCssTimer;
+watch('dist/renderer-next', (_event, name) => {
+  if (name !== 'style.css') return;
+  clearTimeout(nextCssTimer);
+  nextCssTimer = setTimeout(() => scheduleReload('css'), 150);
+});
 
 // ---------------------------------------------------------------- static files (HTML, CSS, fonts, icon), copied one by one
 function watchStatic(dir, toDir, kindOf) {
@@ -166,6 +176,7 @@ console.log(`[dev] running. Profile: ${profile} (port 47803). Edit the code; the
 
 function shutdown(code) {
   for (const c of contexts) void c.dispose();
+  tailwind.kill();
   killApp();
   rmSync(signalFile, { force: true });
   process.exit(code);

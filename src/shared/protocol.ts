@@ -122,6 +122,8 @@ export interface DiscordResult {
 export interface FixedRoom {
   id: string;
   name: string;
+  /** The picture of the room in the new interface (one of ROOM_ICON_KEYS); empty means the interface picks one from the name. */
+  icon?: string;
   /**
    * The Discord webhook of THIS room, encrypted with the operating system (safeStorage); when set, opening the room posts a notice in
    * that channel. The window only ever sees 'set' or '' here: anyone holding the real address can post in the channel.
@@ -133,6 +135,7 @@ export interface FixedRoom {
 export interface FixedRoomInput {
   id?: string;
   name: string;
+  icon?: string;
   webhook?: string | null;
 }
 
@@ -142,7 +145,13 @@ export interface FixedRoomSaveResult extends DiscordResult {
 
 export const MAX_FIXED_ROOMS = 10;
 
+export type UiVersion = 'legacy' | 'next';
+
 export interface AppConfig {
+  /** Which interface the app opens with: the original one (the default) or the new one (version 2). */
+  ui: UiVersion;
+  /** True once the new interface was opened at least once: from then on nobody is told about it again (not even after going back to the original). */
+  newUiSeen: boolean;
   name: string;
   avatar: string | null;
   port: number;

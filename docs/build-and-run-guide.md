@@ -22,7 +22,8 @@ pnpm install
 node node_modules/electron/install.js   # pnpm skips Electron's postinstall download
 pnpm build:audio                        # builds the C# audio helper into resources/audio (needs .NET SDK)
 pnpm start                              # build + run
-pnpm test                               # invite, STUN parsing and signaling server tests
+pnpm test                               # invite, STUN parsing, signaling server and config-store tests
+pnpm test:e2e:legacy                    # e2e of the original interface (pnpm test:e2e:next for the new one, pnpm test:e2e for both)
 pnpm typecheck
 pnpm dist                               # NSIS installer in release/
 ```
@@ -97,7 +98,25 @@ belongs in the source code.
   hex skin); `build/installer.nsh` shows it for 2.5 s and skips it on silent installs (auto-update).
 - Re-run the scripts only when the artwork or the splash design changes; the generated files are committed.
 
+## Two interfaces (original and new)
+
+The app ships two interfaces over the same code (`Session`, the main process, the Worker, `src/shared`):
+
+- **Original** (default): `src/renderer/` (plain CSS in `styles/app.css`). It shows a notice at the top right, which only its X closes, saying the new one
+  is available; the notice leads to Settings > Interface.
+- **New** (version 2): `src/renderer-next/` (Tailwind v4 + lucide, own page `dist/renderer-next/index.html`, own script and stylesheet). Its entry is
+  `main.ts`; `state.ts` is the store, `flows.ts` creates / joins rooms, `ui/` has the screens. It reuses `renderer/session.ts`, `signaling-client.ts`,
+  `sounds.ts`, `cameras.ts` and `rtc/`, so bugs fixed in those are fixed for both.
+- The choice is `config.ui` (`legacy` | `next`). Only the `ui:set` IPC changes it: it saves the choice and reloads the window, and it refuses while this
+  PC hosts a room (the window of a guest checks before asking). Both interfaces read and write the same config, so favorites, fixed rooms and the profile are shared.
+- `build.mjs` bundles both with esbuild and compiles the Tailwind styles (`buildNextStyles` in `build-config.mjs`).
+
 ## End-to-end tests (Playwright)
+
+There is one Playwright project per interface: `pnpm test:e2e:legacy` (`e2e/`) and `pnpm test:e2e:next` (`e2e-next/`); `pnpm test:e2e` runs both.
+**When only one interface was changed, run only its project.** Code both interfaces share (`Session`, the main process, `src/shared`, the Worker) needs both.
+The text below describes the original interface's specs; the new interface has the same families in `e2e-next/` (home, room, share, camera, multiview,
+cloudflare, fixed-rooms, discord, update, interface, saved-rooms and regressions).
 
 `pnpm test:e2e` builds the app and runs `e2e/*.spec.ts` with Playwright's Electron support. Each test starts real
 app windows (a host and a guest) with separate user-data folders and talks to them through the UI, so do not touch
@@ -116,13 +135,15 @@ fast unit tests (invite code, STUN, signaling server, Discord webhook address, t
 
 `pnpm dev` builds in watch mode and opens the app with live reload, so edits show up while the app is open:
 
-- CSS (`src/renderer/styles`): swapped in place, you keep your place (even inside a room).
+- CSS (`src/renderer/styles`, and the Tailwind styles of `src/renderer-next`, rebuilt by the Tailwind CLI in watch mode): swapped in place, you keep your place (even inside a room).
 - Renderer code or `index.html`: the window reloads (back to the home screen).
 - Main process or preload: the app restarts.
 
 It uses its own profile in `%LOCALAPPDATA%\jaca-anti-janja-dev` and port 47803, separate from the installed app and from the e2e tests.
 F12 (or Ctrl+Shift+I) opens the DevTools. Stop it with Ctrl+C or by closing the app window. The hook that does the reloading
 (`setupDevReload` in `src/main/main.ts`) only runs when `JACA_DEV` is set and the app is not packaged.
+
+To work on the new interface, set `"ui": "next"` in the dev profile's `config.json` (or switch in Settings > Interface); the dev window then reloads `dist/renderer-next`.
 
 `pnpm dev:room` is the same with `--room`: after every reload or restart the window goes to the room screen by itself (it
 creates a room, typing the name "Jaca" first if the dev profile has none). The dev window also listens on the DevTools port 9333

@@ -4,6 +4,7 @@ declare global {
   interface Window {
     jaca: {
       getConfig(): Promise<AppConfig>;
+      setUi(ui: 'legacy' | 'next'): Promise<boolean>;
       setConfig(patch: Partial<AppConfig>): Promise<AppConfig>;
       createRoom(roomName: string, fixedId?: string, takeover?: boolean): Promise<RoomInfo>;
       closeRoom(): Promise<void>;

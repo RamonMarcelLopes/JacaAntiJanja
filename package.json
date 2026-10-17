@@ -1,7 +1,7 @@
 {
   "name": "jaca-anti-janja",
   "productName": "Jaca anti Janja",
-  "version": "0.1.19",
+  "version": "2.0.0",
   "description": "P2P screen sharing with system audio, no cloud backend",
   "main": "dist/main/main.js",
   "private": true,
@@ -20,7 +20,9 @@
     "typecheck:worker": "tsc -p worker/tsconfig.json --noEmit",
     "test:worker": "node worker/test/run.mjs",
     "worker:sync": "node scripts/sync-worker-shared.mjs",
-    "worker:build": "wrangler deploy --dry-run --config worker/wrangler.toml --outdir .wrangler/dry"
+    "worker:build": "wrangler deploy --dry-run --config worker/wrangler.toml --outdir .wrangler/dry",
+    "test:e2e:legacy": "node build.mjs && playwright test --project=legacy",
+    "test:e2e:next": "node build.mjs && playwright test --project=next"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
@@ -76,11 +78,14 @@
     "@fontsource-variable/bricolage-grotesque": "^5.3.0",
     "@fontsource-variable/hanken-grotesk": "^5.3.0",
     "@playwright/test": "^1.64.0",
+    "@tailwindcss/cli": "^4.3.3",
     "@types/node": "^26.6.4",
     "@types/ws": "^8.18.2",
     "electron": "^44.7.0",
     "electron-builder": "^26.15.3",
     "esbuild": "^0.28.2",
+    "lucide": "^1.58.0",
+    "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",
     "wrangler": "^4.148.0",
     "ws": "^8.22.0"

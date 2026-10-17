@@ -2,6 +2,9 @@
 import { encodeCloudInvite, isValidRoomId, parseInvite } from './invite';
 import { FavoriteRoom, FixedRoom, MAX_FAVORITE_ROOMS, MAX_FIXED_ROOMS, MAX_ROOM_NAME } from './protocol';
 
+/** The pictures a fixed room can have in the new interface. */
+export const ROOM_ICON_KEYS = ['film', 'gamepad', 'book', 'music', 'users', 'tv', 'popcorn', 'headphones', 'swords', 'dices', 'trophy', 'rocket', 'code', 'palette', 'graduation', 'coffee', 'pizza', 'heart', 'flame', 'moon'] as const;
+
 const cleanName = (raw: unknown): string => String(raw ?? '').replace(/\s+/g, ' ').trim().slice(0, MAX_ROOM_NAME);
 
 /** Keeps only well-formed Cloudflare codes (stored in their canonical form), one entry per room, with a clean name. */
@@ -28,7 +31,8 @@ export function cleanFixedRooms(raw: unknown): FixedRoom[] {
     const id = String((item as FixedRoom | undefined)?.id ?? '');
     if (!isValidRoomId(id)) continue;
     const hook = (item as FixedRoom).discordWebhookEnc;
-    out.set(id, { id, name: cleanName((item as FixedRoom).name) || 'Sala fixa', discordWebhookEnc: typeof hook === 'string' && hook !== 'set' ? hook : '' });
+    const icon = (ROOM_ICON_KEYS as readonly string[]).includes(String((item as FixedRoom).icon)) ? (item as FixedRoom).icon : undefined;
+    out.set(id, { id, name: cleanName((item as FixedRoom).name) || 'Sala fixa', ...(icon ? { icon } : {}), discordWebhookEnc: typeof hook === 'string' && hook !== 'set' ? hook : '' });
   }
   return [...out.values()].slice(0, MAX_FIXED_ROOMS);
 }

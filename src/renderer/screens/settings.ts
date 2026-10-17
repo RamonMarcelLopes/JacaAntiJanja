@@ -14,7 +14,7 @@ export interface SettingsContext {
   back(): void;
 }
 
-type Category = 'rede' | 'salas' | 'audio' | 'notificacoes' | 'transmissao' | 'camera' | 'sobre';
+type Category = 'rede' | 'salas' | 'audio' | 'notificacoes' | 'transmissao' | 'camera' | 'interface' | 'sobre';
 
 const svg = (inner: string) =>
   `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
@@ -52,6 +52,11 @@ const CATEGORIES: Array<{ id: Category; label: string; icon: string }> = [
     icon: svg('<path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/>'),
   },
   {
+    id: 'interface',
+    label: 'Interface',
+    icon: svg('<rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/>'), // layout
+  },
+  {
     id: 'sobre',
     label: 'Sobre',
     icon: svg('<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>'),
@@ -60,6 +65,11 @@ const CATEGORIES: Array<{ id: Category; label: string; icon: string }> = [
 
 /** Remembers the last category while the app is open, so coming back to Settings lands where you were. */
 let lastCategory: Category = 'rede';
+
+/** The next time Settings opens it lands on the Interface category (the notice about the new interface leads there). */
+export function openSettingsOnInterface(): void {
+  lastCategory = 'interface';
+}
 
 /** Round icon button with a left arrow, placed before the page title. */
 function backButton(onclick: () => void): HTMLButtonElement {
@@ -563,6 +573,57 @@ export function renderSettings(ctx: SettingsContext): { el: HTMLElement; dispose
       });
   };
 
+  // Interface: the classic one (this) or the modern one. Switching reloads the window, so it is refused while a room is open.
+  const interfaceNote = h('div', { class: 'test-result muted' }, '');
+  /** A tiny drawing of the screen of each interface. */
+  const preview = (kind: 'legacy' | 'next') => {
+    const el = h('div', { class: `ui-prev ui-prev-${kind}`, 'aria-hidden': 'true' });
+    el.innerHTML =
+      kind === 'legacy'
+        ? '<i class="a"></i><span class="b"><b></b><b></b><b class="hot"></b><b></b></span>'
+        : '<i class="r"></i><i class="s"></i><span class="m"><b></b><b></b><b></b><b></b></span>'; // static markup, no user data
+    return el;
+  };
+  const interfaceOption = (value: 'legacy' | 'next', title: string, text: string) => {
+    const selected = ctx.cfg.ui === value;
+    return h(
+      'button',
+      {
+        class: 'ui-option',
+        role: 'radio',
+        'aria-checked': String(selected),
+        'aria-label': title,
+        'data-ui': value,
+        disabled: selected || isInRoom(),
+        onclick: async () => {
+          interfaceNote.className = 'test-result muted';
+          interfaceNote.textContent = 'Trocando a interface...';
+          if (!(await window.jaca.setUi(value))) {
+            interfaceNote.className = 'test-result bad';
+            interfaceNote.textContent = 'Não foi possível trocar agora. Saia da sala e tente de novo.';
+          }
+        },
+      },
+      preview(value),
+      h('span', { class: 'ui-option-title' }, h('strong', {}, title), selected ? h('em', {}, 'Em uso') : null),
+      h('span', { class: 'muted ui-option-text' }, text),
+    );
+  };
+  // inside a room the choice is blocked: say so in a box that cannot be missed (switching reloads the window and would end the room)
+  const roomWarning = isInRoom()
+    ? h('div', { class: 'ui-room-warning', role: 'alert' }, h('strong', {}, 'Saia da sala para trocar de interface.'), h('span', {}, 'Trocar recarrega a janela, e isso encerraria a sala em que você está. Saia dela primeiro e escolha de novo.'))
+    : null;
+  const interfacePicker = h(
+    'div',
+    {},
+    roomWarning,
+    h('div', { class: 'ui-list', role: 'radiogroup', 'aria-label': 'Interface do aplicativo' },
+      interfaceOption('legacy', 'Clássica', 'A de sempre: simples, leve e direta.'),
+      interfaceOption('next', 'Moderna', 'Barra de salas, cores à sua escolha e animações.'),
+    ),
+    interfaceNote,
+  );
+
   const panels: Record<Category, HTMLElement> = {
     rede: redePanel,
     salas: h(
@@ -598,6 +659,13 @@ export function renderSettings(ctx: SettingsContext): { el: HTMLElement; dispose
       field('Resolução padrão', select<Resolution>(cfg.cameraResolution, [['720p', '720p'], ['1080p', '1080p'], ['1440p', '1440p']], (v) => void ctx.update({ cameraResolution: v as Resolution })), 'Se a câmera não tiver essa resolução, o Windows usa a mais próxima.'),
       field('FPS padrão', select<number>(cfg.cameraFps, [[30, '30'], [60, '60']], (v) => void ctx.update({ cameraFps: Number(v) as Fps }))),
       field('Modo padrão', select<ShareMode>(cfg.cameraMode, [['motion', 'Movimento (rosto, gestos)'], ['detail', 'Detalhe (objetos, texto)']], (v) => void ctx.update({ cameraMode: v as ShareMode }))),
+    ),
+    interface: h(
+      'section',
+      {},
+      h('h2', {}, 'Interface'),
+      h('p', { class: 'muted' }, 'Escolha como o Jaca anti Janja se parece. As duas fazem as mesmas coisas, e você pode voltar quando quiser.'),
+      interfacePicker,
     ),
     sobre: h(
       'section',
