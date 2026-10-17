@@ -62,6 +62,7 @@ export function stage(): HTMLElement & { draw(animate?: boolean): void; tick(): 
   arena.append(h('div', { class: 'aurora' }, h('i'), h('i'), h('i')), content, notice, callbar);
   root.append(topbar, arena);
   let layout: 'grid' | 'focus' | '' = '';
+  let gridEl: HTMLElement | null = null;
   let clickTimer: number | undefined;
 
   // ------------------------------------------------------------------------------------------------ fullscreen
@@ -78,7 +79,7 @@ export function stage(): HTMLElement & { draw(animate?: boolean): void; tick(): 
 
   // ------------------------------------------------------------------------------------------------ one tile
   function makeTile(p: PeerView): Tile {
-    const el = h('div', { class: 'tile animate-pop', 'data-key': p.peerId, 'data-person': p.name, 'data-tilt': '' });
+    const el = h('div', { class: 'tile animate-pop', 'data-key': p.peerId, 'data-person': p.name });
     const clip = h('div', { class: 'clip' });
     const hue = hueOf(p.peerId);
     const bg = h('div', { class: 'absolute inset-0', style: { background: `radial-gradient(120% 90% at 20% 10%, hsl(${hue} 55% 26%), transparent 60%), radial-gradient(100% 100% at 90% 100%, hsl(${(hue + 50) % 360} 60% 20%), transparent 65%), var(--s3)` } });
@@ -102,6 +103,7 @@ export function stage(): HTMLElement & { draw(animate?: boolean): void; tick(): 
       h('button', { class: 'tile-stop icon-btn !text-white hover:!bg-live', 'data-tip': 'Parar de assistir', 'aria-label': `Parar de assistir ${p.name}`, onclick: (e: Event) => { e.stopPropagation(); S.session?.removeView(p.peerId); } }, icon(X, 16)),
     );
     el.append(clip, badges, name, controls);
+    el.addEventListener('animationend', (e) => { if (e.target === el) el.classList.remove('animate-pop'); }); // the entrance plays once, never again when the tile is moved
     const tile: Tile = { el, id: p.peerId, viewers, video: null, refs: { clip, scene, avatarWrap, gate, badges, controls, name, edge: null, connecting, volume, mute }, sig: '' };
 
     const applyVolume = () => {
@@ -248,13 +250,16 @@ export function stage(): HTMLElement & { draw(animate?: boolean): void; tick(): 
     if (next === 'grid') {
       const n = list.length;
       const cols = n === 2 ? 1 : Math.max(1, Math.ceil(Math.sqrt(n)));
-      const grid = h('div', { class: 'tiles absolute inset-0', style: { '--cols': String(cols), '--rows': String(Math.max(1, Math.ceil(n / cols))) } });
-      for (const p of list) {
-        const t = tiles.get(p.peerId)!;
-        t.el.classList.remove('big', 'fit-w');
-        grid.append(t.el);
-      }
-      content.replaceChildren(grid);
+      // the same grid element is kept while the layout stays a grid: re-inserting the tiles would restart their CSS animations (they would jump)
+      const keep = layout === 'grid' && gridEl && content.firstElementChild === gridEl;
+      const grid = keep ? gridEl! : h('div', { class: 'tiles absolute inset-0' });
+      grid.style.setProperty('--cols', String(cols));
+      grid.style.setProperty('--rows', String(Math.max(1, Math.ceil(n / cols))));
+      const els = list.map((p) => tiles.get(p.peerId)!.el);
+      els.forEach((el) => el.classList.remove('big', 'fit-w'));
+      if (!(keep && Array.from(grid.children).filter((c) => els.includes(c as HTMLElement)).every((c, i) => c === els[i]) && els.every((el) => el.parentElement === grid))) grid.append(...els);
+      gridEl = grid;
+      if (!keep) content.replaceChildren(grid);
     } else {
       const main = tiles.get(focus!)!;
       main.el.classList.remove('fit-w');

@@ -1,7 +1,7 @@
 // Reusable pieces: avatars, switch, slider, dropdown, segmented control, rows of the settings. All animated through styles.css.
 import { BookOpen, Check, ChevronDown, Coffee, Code, Dices, Film, Flame, Gamepad2, GraduationCap, Headphones, Heart, Moon, Music, Palette, Pizza, Popcorn, Rocket, Swords, Trophy, Tv, Users, type IconNode } from 'lucide';
 import { ROOM_ICON_KEYS } from '../../shared/rooms';
-import { dismiss, h, icon, initials } from '../dom';
+import { dismiss, h, icon, initials, reducedMotion } from '../dom';
 import { hueOf } from '../state';
 
 /** The pictures a room can have; the keys are the ones the config accepts (ROOM_ICON_KEYS). */
@@ -14,24 +14,42 @@ const ICON_NAMES: Record<string, string> = { film: 'Filmes', gamepad: 'Jogos', b
 
 export const gradient = (hue: number, spread = 40) => `linear-gradient(135deg, hsl(${hue} 70% 58%), hsl(${(hue + spread) % 360} 75% 42%))`;
 
-/** A grid to choose the icon of a room: the chosen one is lit, the others pop a little on hover. */
+/**
+ * A grid to choose the icon of a room. The chosen one is lit by a highlight that SLIDES to the new choice, passing over the icons in between;
+ * hovering an icon only tints it softly (no border change, no entrance animation: the buttons never move under a pointer that rests on them).
+ */
 export function iconPicker(value: string, hue: number, onChange: (key: string) => void): HTMLElement {
-  const grid = h('div', { class: 'grid grid-cols-10 gap-1.5', role: 'radiogroup', 'aria-label': 'Ícone da sala' });
-  const paint = () =>
-    grid.querySelectorAll<HTMLElement>('button').forEach((b) => {
-      const on = b.dataset.key === value;
-      b.setAttribute('aria-checked', String(on));
-      b.style.background = on ? gradient(hue) : '';
-      b.classList.toggle('text-white', on);
-      b.classList.toggle('text-muted', !on);
-      b.classList.toggle('scale-110', on);
-    });
-  ROOM_ICON_KEYS.forEach((key, i) =>
-    grid.append(
-      h('button', { type: 'button', role: 'radio', 'data-key': key, 'data-tip': ICON_NAMES[key] ?? key, 'aria-label': ICON_NAMES[key] ?? key, class: 'grid place-items-center h-9 rounded-xl bg-s3 border border-line hover:border-accent hover:text-fg transition-all duration-200 animate-fade-up', style: { animationDelay: `${i * 18}ms` }, onclick: () => { value = key; paint(); onChange(key); } }, icon(ROOM_ICONS[key], 18)),
-    ),
-  );
+  const grid = h('div', { class: 'relative grid grid-cols-10 gap-1.5', role: 'radiogroup', 'aria-label': 'Ícone da sala' });
+  const sel = h('i', { class: 'absolute left-0 top-0 h-9 rounded-xl pointer-events-none', style: { background: gradient(hue), width: '0px', boxShadow: '0 6px 16px -6px color-mix(in oklab, var(--accent) 70%, transparent)' }, 'aria-hidden': 'true' });
+  grid.append(sel);
+  const buttons = new Map<string, HTMLButtonElement>();
+  const place = (animate: boolean) => {
+    const b = buttons.get(value);
+    if (!b || !b.offsetWidth) return;
+    sel.style.transition = animate && !reducedMotion() ? 'transform 0.55s cubic-bezier(0.34, 1.35, 0.64, 1), width 0.3s' : 'none';
+    sel.style.width = `${b.offsetWidth}px`;
+    sel.style.transform = `translate(${b.offsetLeft}px, ${b.offsetTop}px)`;
+  };
+  const paint = () => buttons.forEach((b, key) => {
+    const on = key === value;
+    b.setAttribute('aria-checked', String(on));
+    b.classList.toggle('text-white', on);
+    b.classList.toggle('text-muted', !on);
+  });
+  ROOM_ICON_KEYS.forEach((key) => {
+    const b = h('button', { type: 'button', role: 'radio', 'data-key': key, 'data-tip': ICON_NAMES[key] ?? key, 'aria-label': ICON_NAMES[key] ?? key, class: 'relative z-[1] grid place-items-center h-9 rounded-xl border border-line bg-transparent transition-colors duration-150 hover:bg-s4 hover:text-fg', onclick: () => {
+      value = key;
+      paint();
+      place(true);
+      onChange(key);
+    } }, icon(ROOM_ICONS[key], 18));
+    buttons.set(key, b);
+    grid.append(b);
+  });
   paint();
+  // the grid is measured once it is on the page (and again if the dialog is resized)
+  requestAnimationFrame(() => requestAnimationFrame(() => place(false)));
+  new ResizeObserver(() => place(false)).observe(grid);
   return grid;
 }
 

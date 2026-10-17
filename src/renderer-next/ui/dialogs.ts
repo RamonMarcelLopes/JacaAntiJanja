@@ -36,6 +36,8 @@ const header = (title: string, sub: string | null, close: () => void, ico: IconN
 
 const footer = (...buttons: HTMLElement[]) => h('div', { class: 'flex justify-end gap-2 p-6 pt-4 border-t border-line mt-4' }, ...buttons);
 const label = (text: string, control: Node) => h('label', { class: 'block mb-4' }, h('span', { class: 'block text-xs font-bold tracking-wide text-muted uppercase mb-1.5' }, text), control);
+/** Same look as `label`, but a plain box: a <label> around several buttons makes the browser treat its FIRST button as hovered/pressed whenever the group is (that was the first icon staying lit). */
+const group = (text: string, control: Node) => h('div', { class: 'block mb-4' }, h('span', { class: 'block text-xs font-bold tracking-wide text-muted uppercase mb-1.5' }, text), control);
 const shake = (el: HTMLElement) => el.animate([{ transform: 'translateX(0)' }, { transform: 'translateX(-8px)' }, { transform: 'translateX(8px)' }, { transform: 'translateX(-5px)' }, { transform: 'translateX(0)' }], { duration: 380 });
 const WEBHOOK_HELP = 'No Discord: configurações do canal > Integrações > Webhooks > Novo webhook > copiar a URL. Fica guardada criptografada neste PC e nunca aparece na tela. Quem tiver essa URL consegue postar no canal, e o código da sala fica visível para todos que veem o canal.';
 
@@ -78,7 +80,7 @@ export function openCreateRoom(): void {
   const name = h('input', { class: 'field', placeholder: DEFAULT_ROOM_NAME, maxLength: MAX_ROOM_NAME, value: DEFAULT_ROOM_NAME, 'aria-label': 'Nome da sala' }) as HTMLInputElement;
   const discord = discordPart(false);
   const discordBox = h('div', { class: 'hidden' }, discord.el);
-  const iconRow = h('div', {}, label('Ícone da sala', iconPicker(iconKey, hueOf(DEFAULT_ROOM_NAME), (k) => (iconKey = k))));
+  const iconRow = h('div', {}, group('Ícone da sala', iconPicker(iconKey, hueOf(DEFAULT_ROOM_NAME), (k) => (iconKey = k))));
   const create = h('button', { class: 'btn btn-primary ripple' }, icon(Plus, 16), 'Criar sala');
   const title = h('h2', { class: 'font-display text-xl font-bold' }, 'Iniciar sala');
   void title;
@@ -563,7 +565,7 @@ export function editFixedRoom(room: FixedRoom): Promise<boolean> {
     const close = modal(
       h('div', {},
         header('Editar sala', 'O código da sala continua o mesmo. Quem a favoritou vê o nome novo quando ela estiver aberta.', () => close(), Pencil),
-        h('div', { class: 'p-6 pt-4' }, label('Nome da sala', name), label('Ícone da sala', iconPicker(iconKey || 'users', hueOf(room.id), (k) => (iconKey = k))), discord.el, status),
+        h('div', { class: 'p-6 pt-4' }, label('Nome da sala', name), group('Ícone da sala', iconPicker(iconKey || 'users', hueOf(room.id), (k) => (iconKey = k))), discord.el, status),
         footer(h('button', { class: 'btn btn-ghost', onclick: () => close() }, 'Cancelar'), save)),
       { onClose: () => resolve(saved) },
     );

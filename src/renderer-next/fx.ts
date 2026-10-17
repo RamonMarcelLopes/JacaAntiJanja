@@ -1,4 +1,4 @@
-// Small motion helpers used everywhere: pointer light, ripple, tilt, tooltips, toasts, confetti, rolling numbers, FLIP.
+// Small motion helpers used everywhere: pointer light, ripple, tooltips, toasts, confetti, rolling numbers, FLIP.
 import { dismiss, h, icon, pick, rand, reducedMotion } from './dom';
 import { Check, CircleAlert, Info, X } from 'lucide';
 
@@ -13,18 +13,6 @@ export function initFx(): void {
       spot.style.setProperty('--mx', `${e.clientX - r.left}px`);
       spot.style.setProperty('--my', `${e.clientY - r.top}px`);
     }
-    // 3D tilt of the stage tiles
-    const tile = (e.target as HTMLElement).closest?.('.tile[data-tilt]') as HTMLElement | null;
-    if (tile && !reducedMotion()) {
-      const r = tile.getBoundingClientRect();
-      const px = (e.clientX - r.left) / r.width - 0.5;
-      const py = (e.clientY - r.top) / r.height - 0.5;
-      tile.style.transform = `perspective(900px) rotateX(${(-py * 5).toFixed(2)}deg) rotateY(${(px * 7).toFixed(2)}deg) scale(1.012)`;
-    }
-  });
-  body.addEventListener('pointerout', (e) => {
-    const tile = (e.target as HTMLElement).closest?.('.tile[data-tilt]') as HTMLElement | null;
-    if (tile && !tile.contains(e.relatedTarget as Node)) tile.style.transform = '';
   });
 
   // ripple on every .ripple element

@@ -214,13 +214,14 @@ html.no-motion *, html.no-motion *::before, html.no-motion *::after { animation-
   .tile {
     position: relative; flex: none; aspect-ratio: 16 / 9; border-radius: 14px; background: var(--s3); border: 1px solid var(--line);
     width: min(calc((100cqw - (var(--cols, 1) - 1) * 12px) / var(--cols, 1)), calc((100cqh - (var(--rows, 1) - 1) * 12px) / var(--rows, 1) * 16 / 9));
-    transform-style: preserve-3d; transition: border-color 0.25s, box-shadow 0.3s, transform 0.18s ease-out;
+    transition: border-color 0.25s, box-shadow 0.3s, transform 0.18s ease-out;
     overflow: hidden;
   }
   .tile.big { width: min(100cqw, 100cqh * 16 / 9); }
   .tile.fit-w { width: 100%; }
   .tile.fit-w .tile-avatar > div { transform: scale(0.52); }
   .tile:fullscreen { width: 100vw; height: 100vh; border-radius: 0; aspect-ratio: auto; }
+  .tile:hover:not(:fullscreen) { transform: scale(1.012); }
   .tile:hover { border-color: color-mix(in oklab, var(--accent) 55%, var(--line)); box-shadow: 0 18px 40px -18px color-mix(in oklab, var(--accent) 55%, transparent); }
   .tile.live { overflow: visible; }
   .tile .clip { position: absolute; inset: 0; border-radius: inherit; overflow: hidden; }
